@@ -1,0 +1,15 @@
+# Python
+circles-backend/venv/
+circles-backend/__pycache__/
+circles-backend/.env
+circles-backend/*.pyc
+circles-backend/serviceAccountKey.json
+
+# Next.js
+circles-frontend/.next/
+circles-frontend/node_modules/
+circles-frontend/.env.local
+
+# General
+.DS_Store
+*.log
