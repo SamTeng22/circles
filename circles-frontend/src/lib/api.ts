@@ -30,6 +30,7 @@ async function request<T>(
 export const api = {
   get: <T>(path: string) => request<T>("GET", path),
   post: <T>(path: string, body: unknown) => request<T>("POST", path, body),
+  del: <T>(path: string) => request<T>("DELETE", path),
   upload: <T>(path: string, formData: FormData) =>
     request<T>("POST", path, undefined, formData),
 };
@@ -49,8 +50,15 @@ export const notesApi = {
   upload: (circleId: string, file: File) => {
     const fd = new FormData();
     fd.append("file", file);
-    return api.upload<{ note_id: string }>(`/api/notes/${circleId}/upload`, fd);
+    return api.upload<{ note_id: string; status: string }>(
+      `/api/notes/${circleId}/upload`,
+      fd
+    );
   },
+  fileUrl: (noteId: string) =>
+    api.get<{ url: string; filename: string }>(`/api/notes/file/${noteId}`),
+  delete: (circleId: string, noteId: string) =>
+    api.del<{ deleted: string }>(`/api/notes/${circleId}/${noteId}`),
 };
 
 export const quizApi = {
@@ -78,12 +86,19 @@ export interface Circle {
   created_at: string;
 }
 
+export type NoteStatus = "processing" | "ready" | "failed";
+
 export interface Note {
   id: string;
   circle_id: string;
   user_id: string;
   filename: string;
   uploader_name: string;
+  status: NoteStatus;
+  s3_key: string | null;
+  content_type: string | null;
+  size_bytes: number | null;
+  error: string | null;
   created_at: string;
 }
 

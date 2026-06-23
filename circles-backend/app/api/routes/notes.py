@@ -1,46 +1,155 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
 from app.core.firebase import get_current_user
 from app.db.database import get_pool
 from app.services.embedding import chunk_and_embed
+from app.services import storage, extract
 
 router = APIRouter()
+
+
+async def _assert_member(conn, circle_id: str, user_id) -> None:
+    member = await conn.fetchrow(
+        "SELECT 1 FROM circle_members WHERE circle_id = $1 AND user_id = $2",
+        circle_id, user_id,
+    )
+    if not member:
+        raise HTTPException(status_code=403, detail="Not a member of this circle")
+
 
 @router.post("/{circle_id}/upload")
 async def upload_notes(
     circle_id: str,
+    background: BackgroundTasks,
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user),
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        member = await conn.fetchrow(
-            "SELECT * FROM circle_members WHERE circle_id = $1 AND user_id = $2",
-            circle_id, current_user["id"],
-        )
-        if not member:
-            raise HTTPException(status_code=403, detail="Not a member of this circle")
+        await _assert_member(conn, circle_id, current_user["id"])
 
-    content_bytes = await file.read()
-    content = content_bytes.decode("utf-8", errors="ignore")
+    data = await file.read()
+    content_type = file.content_type or "application/octet-stream"
 
+    # 1. Store the original file in object storage (source of truth).
+    key = storage.put_object(data, content_type, circle_id, file.filename)
+
+    # 2. Record the note immediately as "processing" (text/embeddings come later).
     async with pool.acquire() as conn:
         note = await conn.fetchrow(
             """
-            INSERT INTO notes (circle_id, user_id, filename, content)
-            VALUES ($1, $2, $3, $4) RETURNING *
+            INSERT INTO notes
+                (circle_id, user_id, filename, content, s3_key, content_type, size_bytes, status)
+            VALUES ($1, $2, $3, NULL, $4, $5, $6, 'processing')
+            RETURNING *
             """,
-            circle_id, current_user["id"], file.filename, content,
+            circle_id, current_user["id"], file.filename, key, content_type, len(data),
         )
 
-    # Chunk and embed in background
-    await chunk_and_embed(
-        note_id=str(note["id"]),
-        circle_id=circle_id,
-        user_id=str(current_user["id"]),
-        content=content,
+    # 3. Extract text + embed off the request path so the response returns now.
+    background.add_task(
+        _process_note,
+        str(note["id"]), circle_id, str(current_user["id"]),
+        data, content_type, file.filename,
     )
 
-    return {"message": "Notes uploaded and processing started", "note_id": str(note["id"])}
+    return {"note_id": str(note["id"]), "status": "processing"}
+
+
+async def _process_note(
+    note_id: str,
+    circle_id: str,
+    user_id: str,
+    data: bytes,
+    content_type: str,
+    filename: str,
+):
+    pool = await get_pool()
+    try:
+        text = extract.extract_text(data, content_type, filename)
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE notes SET content = $1 WHERE id = $2", text, note_id
+            )
+        await chunk_and_embed(
+            note_id=note_id, circle_id=circle_id, user_id=user_id, content=text
+        )
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE notes SET status = 'ready', error = NULL WHERE id = $1", note_id
+            )
+    except Exception as e:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE notes SET status = 'failed', error = $1 WHERE id = $2",
+                str(e)[:500], note_id,
+            )
+        print(f"Note processing failed for {note_id}: {e}")
+
+
+@router.get("/file/{note_id}")
+async def get_note_file(
+    note_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Return a short-lived URL to download/view the note's original file."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        note = await conn.fetchrow(
+            "SELECT circle_id, s3_key, filename FROM notes WHERE id = $1", note_id
+        )
+        if not note:
+            raise HTTPException(status_code=404, detail="Note not found")
+        await _assert_member(conn, str(note["circle_id"]), current_user["id"])
+
+    if not note["s3_key"]:
+        # Older text-only notes have no stored original file.
+        raise HTTPException(status_code=404, detail="No stored file for this note")
+
+    return {"url": storage.presigned_get(note["s3_key"]), "filename": note["filename"]}
+
+
+@router.delete("/{circle_id}/{note_id}")
+async def delete_note(
+    circle_id: str,
+    note_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete a pooled note. Allowed for the uploader or the circle owner.
+
+    Removes the note row (note_chunks cascade via FK) and the stored file.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await _assert_member(conn, circle_id, current_user["id"])
+        note = await conn.fetchrow(
+            "SELECT user_id, s3_key FROM notes WHERE id = $1 AND circle_id = $2",
+            note_id, circle_id,
+        )
+        if not note:
+            raise HTTPException(status_code=404, detail="Note not found")
+
+        owner = await conn.fetchrow(
+            "SELECT owner_id FROM circles WHERE id = $1", circle_id
+        )
+        is_uploader = note["user_id"] == current_user["id"]
+        is_circle_owner = owner and owner["owner_id"] == current_user["id"]
+        if not (is_uploader or is_circle_owner):
+            raise HTTPException(
+                status_code=403,
+                detail="Only the uploader or circle owner can delete this note",
+            )
+
+        await conn.execute("DELETE FROM notes WHERE id = $1", note_id)
+
+    # Best-effort: drop the original file once the row is gone.
+    if note["s3_key"]:
+        try:
+            storage.delete_object(note["s3_key"])
+        except Exception as e:
+            print(f"Failed to delete object {note['s3_key']}: {e}")
+
+    return {"deleted": note_id}
+
 
 @router.get("/{circle_id}")
 async def list_circle_notes(
@@ -49,12 +158,7 @@ async def list_circle_notes(
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        member = await conn.fetchrow(
-            "SELECT * FROM circle_members WHERE circle_id = $1 AND user_id = $2",
-            circle_id, current_user["id"],
-        )
-        if not member:
-            raise HTTPException(status_code=403, detail="Not a member of this circle")
+        await _assert_member(conn, circle_id, current_user["id"])
         notes = await conn.fetch(
             """
             SELECT n.*, u.display_name as uploader_name

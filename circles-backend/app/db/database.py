@@ -1,12 +1,23 @@
+import json
 import asyncpg
 from app.core.config import settings
 
 _pool = None
 
+async def _init_connection(conn):
+    # Auto encode/decode JSONB columns as Python objects (lists/dicts) instead
+    # of raw JSON strings.
+    await conn.set_type_codec(
+        "jsonb",
+        encoder=json.dumps,
+        decoder=json.loads,
+        schema="pg_catalog",
+    )
+
 async def get_pool():
     global _pool
     if _pool is None:
-        _pool = await asyncpg.create_pool(settings.DATABASE_URL)
+        _pool = await asyncpg.create_pool(settings.DATABASE_URL, init=_init_connection)
     return _pool
 
 async def init_db():
@@ -46,7 +57,12 @@ async def init_db():
                 circle_id UUID REFERENCES circles(id) ON DELETE CASCADE,
                 user_id UUID REFERENCES users(id) ON DELETE CASCADE,
                 filename TEXT NOT NULL,
-                content TEXT NOT NULL,
+                content TEXT,
+                s3_key TEXT,
+                content_type TEXT,
+                size_bytes BIGINT,
+                status TEXT DEFAULT 'ready',
+                error TEXT,
                 created_at TIMESTAMPTZ DEFAULT now()
             )
         """)

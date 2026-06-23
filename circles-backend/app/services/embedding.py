@@ -1,8 +1,20 @@
+import math
 import google.generativeai as genai
 from app.core.config import settings
 from app.db.database import get_pool
 
 genai.configure(api_key=settings.GEMINI_API_KEY)
+
+# gemini-embedding-001 defaults to 3072 dims; we pin to 768 to match the
+# note_chunks.embedding vector(768) column. Reduced-dimension outputs aren't
+# pre-normalized, so we L2-normalize for stable similarity search.
+EMBED_MODEL = "models/gemini-embedding-001"
+EMBED_DIMS = 768
+
+
+def _normalize(vec: list[float]) -> list[float]:
+    norm = math.sqrt(sum(x * x for x in vec))
+    return [x / norm for x in vec] if norm else vec
 
 def semantic_chunk(text: str, chunk_size: int = 400, overlap: int = 50) -> list[str]:
     """Simple sliding window chunker. Replace with semantic chunker later."""
@@ -17,11 +29,12 @@ def semantic_chunk(text: str, chunk_size: int = 400, overlap: int = 50) -> list[
 
 async def embed_text(text: str) -> list[float]:
     result = genai.embed_content(
-        model="models/text-embedding-004",
+        model=EMBED_MODEL,
         content=text,
         task_type="retrieval_document",
+        output_dimensionality=EMBED_DIMS,
     )
-    return result["embedding"]
+    return _normalize(result["embedding"])
 
 async def chunk_and_embed(
     note_id: str,

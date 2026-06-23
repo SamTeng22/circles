@@ -5,7 +5,7 @@ from app.db.database import get_pool
 from app.services.embedding import embed_text
 
 genai.configure(api_key=settings.GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+model = genai.GenerativeModel("gemini-2.5-flash")
 
 async def retrieve_chunks(circle_id: str, topic: str, k: int = 10) -> list[str]:
     pool = await get_pool()
