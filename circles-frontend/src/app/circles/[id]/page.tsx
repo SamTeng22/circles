@@ -51,6 +51,14 @@ export default function CircleDetailPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [noteToDelete, setNoteToDelete] = useState<Note | null>(null);
 
+  // Viewing / editing a note's extracted text
+  const [viewNote, setViewNote] = useState<Note | null>(null);
+  const [viewLoading, setViewLoading] = useState(false);
+  const [viewError, setViewError] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [editContent, setEditContent] = useState("");
+  const [savingContent, setSavingContent] = useState(false);
+
   useEffect(() => {
     if (!loading && !user) router.push("/login");
   }, [user, loading, router]);
@@ -125,6 +133,54 @@ export default function CircleDetailPage() {
       setNotes(await notesApi.list(id));
     } catch {
       /* keep existing list on refresh failure */
+    }
+  }
+
+  async function openNoteView(note: Note) {
+    setViewNote(note);
+    setEditing(false);
+    setViewError("");
+    setEditContent("");
+    setViewLoading(true);
+    try {
+      const full = await notesApi.detail(note.id);
+      setViewNote(full);
+      setEditContent(full.content ?? "");
+    } catch (e: any) {
+      setViewError(e.message || "Couldn't load this note's contents.");
+    } finally {
+      setViewLoading(false);
+    }
+  }
+
+  function closeNoteView() {
+    if (savingContent) return;
+    setViewNote(null);
+    setEditing(false);
+    setViewError("");
+    setEditContent("");
+  }
+
+  async function saveNoteContent() {
+    if (!viewNote || savingContent) return;
+    setSavingContent(true);
+    setViewError("");
+    try {
+      await notesApi.updateContent(id, viewNote.id, editContent);
+      // Content flips to "processing" while it re-embeds; reflect that locally.
+      setNotes((prev) =>
+        prev.map((x) =>
+          x.id === viewNote.id
+            ? { ...x, status: "processing", content: editContent, edited_at: new Date().toISOString() }
+            : x
+        )
+      );
+      setViewNote(null);
+      setEditing(false);
+    } catch (e: any) {
+      setViewError(e.message || "Failed to save changes.");
+    } finally {
+      setSavingContent(false);
     }
   }
 
@@ -395,6 +451,9 @@ export default function CircleDetailPage() {
                   <div key={n.id} className="card note-card">
                     <span className="eyebrow">
                       {n.uploader_name} · {timeAgo(n.created_at)}
+                      {n.edited_at && (
+                        <> · edited {timeAgo(n.edited_at)}</>
+                      )}
                     </span>
                     <h3>
                       {n.s3_key ? (
@@ -418,16 +477,26 @@ export default function CircleDetailPage() {
                           </span>
                         )}
                       </span>
-                      {canDelete(n) && (
+                      <span style={{ display: "flex", gap: 8 }}>
                         <button
                           className="btn btn-ghost btn-sm"
-                          onClick={() => setNoteToDelete(n)}
-                          disabled={deletingId === n.id}
-                          title="Delete note"
+                          onClick={() => openNoteView(n)}
+                          disabled={n.status === "processing"}
+                          title="See the text the system extracted from this note"
                         >
-                          {deletingId === n.id ? "Deleting…" : "Delete"}
+                          View / Edit
                         </button>
-                      )}
+                        {canDelete(n) && (
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => setNoteToDelete(n)}
+                            disabled={deletingId === n.id}
+                            title="Delete note"
+                          >
+                            {deletingId === n.id ? "Deleting…" : "Delete"}
+                          </button>
+                        )}
+                      </span>
                     </div>
                   </div>
                 ))}
@@ -539,6 +608,90 @@ export default function CircleDetailPage() {
               <button className="btn btn-primary btn-sm" onClick={handleGenerate} disabled={genBusy || !genTitle.trim()}>
                 {genBusy ? "Generating…" : "Generate"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* View / edit note contents modal */}
+      {viewNote && (
+        <div className="modal-overlay" onClick={closeNoteView}>
+          <div
+            className="modal"
+            style={{ maxWidth: 720, width: "min(720px, 92vw)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ marginBottom: 2 }}>{viewNote.filename}</h3>
+            <p className="sub" style={{ fontSize: 12.5, margin: "0 0 12px" }}>
+              This is the text the system extracted and uses for quizzes — what the computer
+              knows about this note.
+            </p>
+
+            {viewError && <div className="auth-error" style={{ marginBottom: 12 }}>{viewError}</div>}
+
+            {viewLoading ? (
+              <p className="sub" style={{ fontSize: 13.5 }}>Loading contents…</p>
+            ) : editing ? (
+              <textarea
+                className="tinp"
+                style={{ width: "100%", minHeight: 320, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+                disabled={savingContent}
+              />
+            ) : editContent.trim() ? (
+              <div
+                style={{
+                  maxHeight: 420,
+                  overflowY: "auto",
+                  whiteSpace: "pre-wrap",
+                  fontSize: 13.5,
+                  lineHeight: 1.55,
+                  padding: 14,
+                  borderRadius: 10,
+                  background: "var(--panel, #f6f6f8)",
+                  border: "1px solid rgba(0,0,0,0.08)",
+                }}
+              >
+                {editContent}
+              </div>
+            ) : (
+              <p className="sub" style={{ fontSize: 13.5 }}>
+                No extracted text yet
+                {viewNote.status === "failed" ? " — extraction failed for this file." : "."}
+              </p>
+            )}
+
+            <div className="modal-actions">
+              {editing ? (
+                <>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setEditing(false)}
+                    disabled={savingContent}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={saveNoteContent}
+                    disabled={savingContent}
+                  >
+                    {savingContent ? "Saving…" : "Save & re-embed"}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button className="btn btn-ghost btn-sm" onClick={closeNoteView}>
+                    Close
+                  </button>
+                  {canDelete(viewNote) && !viewLoading && (
+                    <button className="btn btn-primary btn-sm" onClick={() => setEditing(true)}>
+                      Edit text
+                    </button>
+                  )}
+                </>
+              )}
             </div>
           </div>
         </div>

@@ -57,6 +57,13 @@ export const notesApi = {
   },
   fileUrl: (noteId: string) =>
     api.get<{ url: string; filename: string }>(`/api/notes/file/${noteId}`),
+  detail: (noteId: string) => api.get<Note>(`/api/notes/detail/${noteId}`),
+  updateContent: (circleId: string, noteId: string, content: string) =>
+    request<{ note_id: string; status: string }>(
+      "PUT",
+      `/api/notes/${circleId}/${noteId}/content`,
+      { content }
+    ),
   delete: (circleId: string, noteId: string) =>
     api.del<{ deleted: string }>(`/api/notes/${circleId}/${noteId}`),
 };
@@ -94,12 +101,14 @@ export interface Note {
   user_id: string;
   filename: string;
   uploader_name: string;
+  content?: string | null;
   status: NoteStatus;
   s3_key: string | null;
   content_type: string | null;
   size_bytes: number | null;
   error: string | null;
   created_at: string;
+  edited_at?: string | null;
 }
 
 export interface Quiz {
