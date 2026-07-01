@@ -63,9 +63,14 @@ async def init_db():
                 size_bytes BIGINT,
                 status TEXT DEFAULT 'ready',
                 error TEXT,
-                created_at TIMESTAMPTZ DEFAULT now()
+                created_at TIMESTAMPTZ DEFAULT now(),
+                edited_at TIMESTAMPTZ
             )
         """)
+        # Migration for existing databases created before edited_at existed.
+        await conn.execute(
+            "ALTER TABLE notes ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ"
+        )
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS note_chunks (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

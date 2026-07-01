@@ -1,3 +1,4 @@
+import asyncio
 import math
 import google.generativeai as genai
 from app.core.config import settings
@@ -27,7 +28,7 @@ def semantic_chunk(text: str, chunk_size: int = 400, overlap: int = 50) -> list[
         i += chunk_size - overlap
     return [c for c in chunks if len(c.strip()) > 50]
 
-async def embed_text(text: str) -> list[float]:
+def _embed_sync(text: str) -> list[float]:
     result = genai.embed_content(
         model=EMBED_MODEL,
         content=text,
@@ -35,6 +36,11 @@ async def embed_text(text: str) -> list[float]:
         output_dimensionality=EMBED_DIMS,
     )
     return _normalize(result["embedding"])
+
+async def embed_text(text: str) -> list[float]:
+    # genai.embed_content is a blocking network call; run it off the event loop
+    # so background embedding never stalls the API server.
+    return await asyncio.to_thread(_embed_sync, text)
 
 async def chunk_and_embed(
     note_id: str,

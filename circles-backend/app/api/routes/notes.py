@@ -1,10 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
+from pydantic import BaseModel
 from app.core.firebase import get_current_user
 from app.db.database import get_pool
 from app.services.embedding import chunk_and_embed
 from app.services import storage, extract
 
 router = APIRouter()
+
+
+class NoteContentUpdate(BaseModel):
+    content: str
 
 
 async def _assert_member(conn, circle_id: str, user_id) -> None:
@@ -106,6 +111,99 @@ async def get_note_file(
         raise HTTPException(status_code=404, detail="No stored file for this note")
 
     return {"url": storage.presigned_get(note["s3_key"]), "filename": note["filename"]}
+
+
+@router.get("/detail/{note_id}")
+async def get_note_detail(
+    note_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Return a single note including its extracted text content.
+
+    The content is the text the system pulled from the uploaded file and uses
+    for embeddings/quiz generation — i.e. "what the computer knows".
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        note = await conn.fetchrow(
+            """
+            SELECT n.*, u.display_name as uploader_name
+            FROM notes n JOIN users u ON u.id = n.user_id
+            WHERE n.id = $1
+            """,
+            note_id,
+        )
+        if not note:
+            raise HTTPException(status_code=404, detail="Note not found")
+        await _assert_member(conn, str(note["circle_id"]), current_user["id"])
+    return dict(note)
+
+
+async def _reembed_note(note_id: str, circle_id: str, user_id: str, content: str):
+    """Replace a note's chunks/embeddings from edited content, then mark ready."""
+    pool = await get_pool()
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM note_chunks WHERE note_id = $1", note_id)
+        await chunk_and_embed(
+            note_id=note_id, circle_id=circle_id, user_id=user_id, content=content
+        )
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE notes SET status = 'ready', error = NULL WHERE id = $1", note_id
+            )
+    except Exception as e:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE notes SET status = 'failed', error = $1 WHERE id = $2",
+                str(e)[:500], note_id,
+            )
+        print(f"Note re-embedding failed for {note_id}: {e}")
+
+
+@router.put("/{circle_id}/{note_id}/content")
+async def update_note_content(
+    circle_id: str,
+    note_id: str,
+    body: NoteContentUpdate,
+    background: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+):
+    """Edit a note's extracted text. Allowed for the uploader or circle owner.
+
+    Saves the new content immediately and re-chunks/re-embeds off the request
+    path (status flips to 'processing' until the new embeddings land).
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await _assert_member(conn, circle_id, current_user["id"])
+        note = await conn.fetchrow(
+            "SELECT user_id FROM notes WHERE id = $1 AND circle_id = $2",
+            note_id, circle_id,
+        )
+        if not note:
+            raise HTTPException(status_code=404, detail="Note not found")
+
+        owner = await conn.fetchrow(
+            "SELECT owner_id FROM circles WHERE id = $1", circle_id
+        )
+        is_uploader = note["user_id"] == current_user["id"]
+        is_circle_owner = owner and owner["owner_id"] == current_user["id"]
+        if not (is_uploader or is_circle_owner):
+            raise HTTPException(
+                status_code=403,
+                detail="Only the uploader or circle owner can edit this note",
+            )
+
+        await conn.execute(
+            "UPDATE notes SET content = $1, status = 'processing', edited_at = now() WHERE id = $2",
+            body.content, note_id,
+        )
+
+    background.add_task(
+        _reembed_note, note_id, circle_id, str(note["user_id"]), body.content
+    )
+    return {"note_id": note_id, "status": "processing"}
 
 
 @router.delete("/{circle_id}/{note_id}")
