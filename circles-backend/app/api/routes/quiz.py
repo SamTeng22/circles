@@ -7,6 +7,16 @@ from app.services.quiz_generator import generate_quiz_questions
 
 router = APIRouter()
 
+
+async def _assert_member(conn, circle_id, user_id) -> None:
+    member = await conn.fetchrow(
+        "SELECT 1 FROM circle_members WHERE circle_id = $1 AND user_id = $2",
+        circle_id, user_id,
+    )
+    if not member:
+        raise HTTPException(status_code=403, detail="Not a member of this circle")
+
+
 class GenerateQuizRequest(BaseModel):
     circle_id: str
     title: str
@@ -20,12 +30,7 @@ async def generate_quiz(
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        member = await conn.fetchrow(
-            "SELECT * FROM circle_members WHERE circle_id = $1 AND user_id = $2",
-            body.circle_id, current_user["id"],
-        )
-        if not member:
-            raise HTTPException(status_code=403, detail="Not a member of this circle")
+        await _assert_member(conn, body.circle_id, current_user["id"])
 
     questions = await generate_quiz_questions(
         circle_id=body.circle_id,
@@ -53,6 +58,7 @@ async def get_quiz(
         quiz = await conn.fetchrow("SELECT * FROM quizzes WHERE id = $1", quiz_id)
         if not quiz:
             raise HTTPException(status_code=404, detail="Quiz not found")
+        await _assert_member(conn, quiz["circle_id"], current_user["id"])
     return dict(quiz)
 
 @router.get("/{circle_id}")
@@ -62,12 +68,7 @@ async def list_circle_quizzes(
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        member = await conn.fetchrow(
-            "SELECT * FROM circle_members WHERE circle_id = $1 AND user_id = $2",
-            circle_id, current_user["id"],
-        )
-        if not member:
-            raise HTTPException(status_code=403, detail="Not a member of this circle")
+        await _assert_member(conn, circle_id, current_user["id"])
         quizzes = await conn.fetch(
             "SELECT * FROM quizzes WHERE circle_id = $1 ORDER BY created_at DESC",
             circle_id,
@@ -85,6 +86,7 @@ async def submit_quiz(
         quiz = await conn.fetchrow("SELECT * FROM quizzes WHERE id = $1", quiz_id)
         if not quiz:
             raise HTTPException(status_code=404, detail="Quiz not found")
+        await _assert_member(conn, quiz["circle_id"], current_user["id"])
         questions = json.loads(quiz["questions"]) if isinstance(quiz["questions"], str) else quiz["questions"]
         score = sum(
             1 for i, q in enumerate(questions)

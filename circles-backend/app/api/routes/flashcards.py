@@ -6,6 +6,16 @@ from app.services.flashcard_generator import generate_flashcards
 
 router = APIRouter()
 
+
+async def _assert_member(conn, circle_id, user_id) -> None:
+    member = await conn.fetchrow(
+        "SELECT 1 FROM circle_members WHERE circle_id = $1 AND user_id = $2",
+        circle_id, user_id,
+    )
+    if not member:
+        raise HTTPException(status_code=403, detail="Not a member of this circle")
+
+
 class GenerateDeckRequest(BaseModel):
     circle_id: str
     title: str
@@ -19,12 +29,7 @@ async def generate_deck(
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        member = await conn.fetchrow(
-            "SELECT * FROM circle_members WHERE circle_id = $1 AND user_id = $2",
-            body.circle_id, current_user["id"],
-        )
-        if not member:
-            raise HTTPException(status_code=403, detail="Not a member of this circle")
+        await _assert_member(conn, body.circle_id, current_user["id"])
 
     cards = await generate_flashcards(
         circle_id=body.circle_id,
@@ -57,6 +62,7 @@ async def get_deck(
         deck = await conn.fetchrow("SELECT * FROM flashcard_decks WHERE id = $1", deck_id)
         if not deck:
             raise HTTPException(status_code=404, detail="Deck not found")
+        await _assert_member(conn, deck["circle_id"], current_user["id"])
     return dict(deck)
 
 @router.get("/{circle_id}")
@@ -66,12 +72,7 @@ async def list_circle_decks(
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        member = await conn.fetchrow(
-            "SELECT * FROM circle_members WHERE circle_id = $1 AND user_id = $2",
-            circle_id, current_user["id"],
-        )
-        if not member:
-            raise HTTPException(status_code=403, detail="Not a member of this circle")
+        await _assert_member(conn, circle_id, current_user["id"])
         decks = await conn.fetch(
             "SELECT * FROM flashcard_decks WHERE circle_id = $1 ORDER BY created_at DESC",
             circle_id,
