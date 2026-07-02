@@ -82,6 +82,18 @@ export const quizApi = {
     api.post<{ score: number; total: number }>(`/api/quiz/${quizId}/submit`, answers),
 };
 
+export const flashcardsApi = {
+  list: (circleId: string) => api.get<FlashcardDeck[]>(`/api/flashcards/${circleId}`),
+  getById: (deckId: string) => api.get<FlashcardDeck>(`/api/flashcards/detail/${deckId}`),
+  generate: (circleId: string, title: string, topic?: string, num?: number) =>
+    api.post<FlashcardDeck>("/api/flashcards/generate", {
+      circle_id: circleId,
+      title,
+      topic: topic ?? "",
+      num_cards: num ?? 10,
+    }),
+};
+
 // Types
 export interface Circle {
   id: string;
@@ -125,4 +137,18 @@ export interface Question {
   correct_answer: string;
   bloom_level: string;
   explanation: string;
+}
+
+export interface Flashcard {
+  front: string;
+  back: string;
+  hint?: string;
+}
+
+export interface FlashcardDeck {
+  id: string;
+  circle_id: string;
+  title: string;
+  cards: Flashcard[];
+  created_at: string;
 }

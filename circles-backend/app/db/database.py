@@ -104,6 +104,16 @@ async def init_db():
             )
         """)
         await conn.execute("""
+            CREATE TABLE IF NOT EXISTS flashcard_decks (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                circle_id UUID REFERENCES circles(id) ON DELETE CASCADE,
+                created_by UUID REFERENCES users(id),
+                title TEXT NOT NULL,
+                cards JSONB NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT now()
+            )
+        """)
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS quiz_scores (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 quiz_id UUID REFERENCES quizzes(id) ON DELETE CASCADE,

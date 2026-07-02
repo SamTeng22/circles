@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
-import { circlesApi, notesApi, quizApi, Circle, Note, Quiz } from "@/lib/api";
+import { circlesApi, notesApi, quizApi, flashcardsApi, Circle, Note, Quiz, FlashcardDeck } from "@/lib/api";
 import { Sidebar } from "@/components/Sidebar";
 import { circleColor, initials } from "@/lib/circleStyle";
 import { timeAgo } from "@/lib/format";
@@ -27,6 +27,7 @@ export default function CircleDetailPage() {
   const [circle, setCircle] = useState<Circle | null>(null);
   const [notes, setNotes] = useState<Note[]>([]);
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
+  const [decks, setDecks] = useState<FlashcardDeck[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [tab, setTab] = useState<Tab>("notes");
@@ -37,7 +38,8 @@ export default function CircleDetailPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
 
-  // Quiz generation
+  // Quiz / flashcard generation (one modal, switched by genMode)
+  const [genMode, setGenMode] = useState<"quiz" | "flashcards">("quiz");
   const [showGen, setShowGen] = useState(false);
   const [genTitle, setGenTitle] = useState("");
   const [genTopic, setGenTopic] = useState("");
@@ -72,13 +74,15 @@ export default function CircleDetailPage() {
       circlesApi.get(id),
       notesApi.list(id),
       quizApi.list(id),
+      flashcardsApi.list(id),
       circlesApi.list(),
     ])
-      .then(([c, n, q, all]) => {
+      .then(([c, n, q, d, all]) => {
         if (cancelled) return;
         setCircle(c);
         setNotes(n);
         setQuizzes(q);
+        setDecks(d);
         setAllCircles(all);
       })
       .catch((e: any) => {
@@ -214,17 +218,28 @@ export default function CircleDetailPage() {
     if (file) uploadFile(file);
   }
 
+  function openGen(mode: "quiz" | "flashcards") {
+    setGenMode(mode);
+    setGenTitle("");
+    setGenTopic("");
+    setGenNum(mode === "quiz" ? 5 : 10);
+    setGenError("");
+    setShowGen(true);
+  }
+
   async function handleGenerate() {
     if (!genTitle.trim()) return;
     setGenBusy(true);
     setGenError("");
     try {
-      const quiz = await quizApi.generate(id, genTitle.trim(), genTopic.trim() || undefined, genNum);
-      setQuizzes([quiz, ...quizzes]);
+      if (genMode === "quiz") {
+        const quiz = await quizApi.generate(id, genTitle.trim(), genTopic.trim() || undefined, genNum);
+        setQuizzes([quiz, ...quizzes]);
+      } else {
+        const deck = await flashcardsApi.generate(id, genTitle.trim(), genTopic.trim() || undefined, genNum);
+        setDecks([deck, ...decks]);
+      }
       setShowGen(false);
-      setGenTitle("");
-      setGenTopic("");
-      setGenNum(5);
     } catch (e: any) {
       setGenError(e.message || "Generation failed.");
     } finally {
@@ -343,7 +358,7 @@ export default function CircleDetailPage() {
             Quizzes · {quizzes.length}
           </button>
           <button className={`tab${tab === "flashcards" ? " active" : ""}`} onClick={() => setTab("flashcards")}>
-            Flashcards
+            Flashcards · {decks.length}
           </button>
         </div>
 
@@ -510,7 +525,7 @@ export default function CircleDetailPage() {
           <div>
             <div className="section-head">
               <h2 style={{ fontSize: 17 }}>Quizzes</h2>
-              <button className="btn btn-primary btn-sm" onClick={() => setShowGen(true)}>
+              <button className="btn btn-primary btn-sm" onClick={() => openGen("quiz")}>
                 Generate quiz
               </button>
             </div>
@@ -518,7 +533,7 @@ export default function CircleDetailPage() {
               <div className="empty">
                 <h3>No quizzes yet</h3>
                 <p>Generate one from this circle&apos;s notes.</p>
-                <button className="btn btn-primary btn-sm" onClick={() => setShowGen(true)}>
+                <button className="btn btn-primary btn-sm" onClick={() => openGen("quiz")}>
                   Generate quiz
                 </button>
               </div>
@@ -554,15 +569,45 @@ export default function CircleDetailPage() {
           </div>
         )}
 
-        {/* Flashcards (placeholder) */}
+        {/* Flashcards (real) */}
         {tab === "flashcards" && (
-          <div className="placeholder">
-            <div className="ph-ico">🃏</div>
-            <h3>Flashcards are coming soon</h3>
-            <p>
-              Once flashcard generation is built, decks created from this circle&apos;s verified
-              notes will live here.
-            </p>
+          <div>
+            <div className="section-head">
+              <h2 style={{ fontSize: 17 }}>Flashcard decks</h2>
+              <button className="btn btn-primary btn-sm" onClick={() => openGen("flashcards")}>
+                Generate deck
+              </button>
+            </div>
+            {decks.length === 0 ? (
+              <div className="empty">
+                <h3>No flashcard decks yet</h3>
+                <p>Generate a deck from this circle&apos;s pooled notes to study.</p>
+                <button className="btn btn-primary btn-sm" onClick={() => openGen("flashcards")}>
+                  Generate deck
+                </button>
+              </div>
+            ) : (
+              <div className="grid">
+                {decks.map((d) => (
+                  <div key={d.id} className="card quiz-card">
+                    <span className="eyebrow">Generated · {timeAgo(d.created_at)}</span>
+                    <h3>{d.title}</h3>
+                    <p className="sub" style={{ fontSize: 13.5 }}>
+                      {d.cards.length} card{d.cards.length === 1 ? "" : "s"}
+                    </p>
+                    <div className="quiz-actions">
+                      <button
+                        className="btn btn-primary btn-sm"
+                        style={{ flex: 1 }}
+                        onClick={() => router.push(`/flashcards/${d.id}`)}
+                      >
+                        Study deck
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </main>
@@ -571,12 +616,12 @@ export default function CircleDetailPage() {
       {showGen && (
         <div className="modal-overlay" onClick={() => !genBusy && setShowGen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3>Generate a quiz</h3>
+            <h3>{genMode === "quiz" ? "Generate a quiz" : "Generate a flashcard deck"}</h3>
             {genError && <div className="auth-error">{genError}</div>}
             <div className="field">
               <input
                 className="tinp"
-                placeholder="Quiz title"
+                placeholder={genMode === "quiz" ? "Quiz title" : "Deck title"}
                 value={genTitle}
                 onChange={(e) => setGenTitle(e.target.value)}
                 autoFocus
@@ -595,11 +640,16 @@ export default function CircleDetailPage() {
                 className="tinp"
                 type="number"
                 min={1}
-                max={20}
+                max={genMode === "quiz" ? 20 : 30}
                 value={genNum}
-                onChange={(e) => setGenNum(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
+                onChange={(e) => {
+                  const max = genMode === "quiz" ? 20 : 30;
+                  setGenNum(Math.max(1, Math.min(max, Number(e.target.value) || 1)));
+                }}
               />
-              <p className="sub" style={{ fontSize: 12, margin: "6px 0 0" }}>Number of questions (1–20)</p>
+              <p className="sub" style={{ fontSize: 12, margin: "6px 0 0" }}>
+                {genMode === "quiz" ? "Number of questions (1–20)" : "Number of cards (1–30)"}
+              </p>
             </div>
             <div className="modal-actions">
               <button className="btn btn-ghost btn-sm" onClick={() => setShowGen(false)} disabled={genBusy}>
