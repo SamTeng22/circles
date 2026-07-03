@@ -7,7 +7,7 @@ app = FastAPI(title="Circles API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://your-vercel-app.vercel.app"],
+    allow_origins=["http://localhost:3000", "https://circles-9ez5.vercel.app", "https://staging-circles-sam-9d919e89.vercel.app", "circles-mocha-tau.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
