@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
 from pydantic import BaseModel
 from app.core.firebase import get_current_user
@@ -36,7 +37,11 @@ async def upload_notes(
     content_type = file.content_type or "application/octet-stream"
 
     # 1. Store the original file in object storage (source of truth).
-    key = storage.put_object(data, content_type, circle_id, file.filename)
+    #    put_object is a blocking boto3 call; run it off the event loop so the
+    #    upload doesn't stall other requests.
+    key = await asyncio.to_thread(
+        storage.put_object, data, content_type, circle_id, file.filename
+    )
 
     # 2. Record the note immediately as "processing" (text/embeddings come later).
     async with pool.acquire() as conn:
@@ -70,7 +75,8 @@ async def _process_note(
 ):
     pool = await get_pool()
     try:
-        text = extract.extract_text(data, content_type, filename)
+        # extract_text does blocking PDF rendering / OCR; keep it off the loop.
+        text = await asyncio.to_thread(extract.extract_text, data, content_type, filename)
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE notes SET content = $1 WHERE id = $2", text, note_id

@@ -56,9 +56,12 @@ async def test_chunk_and_embed_inserts_one_row_per_chunk(monkeypatch, fake_pool,
         return fake_pool
     monkeypatch.setattr(embedding, "get_pool", _get_pool)
 
-    async def fake_embed_text(text):
-        return [0.1, 0.2, 0.3]
-    monkeypatch.setattr(embedding, "embed_text", fake_embed_text)
+    # All chunks embed in one batched call; return one vector per input.
+    batch_calls = []
+    async def fake_embed_batch(texts):
+        batch_calls.append(texts)
+        return [[0.1, 0.2, 0.3] for _ in texts]
+    monkeypatch.setattr(embedding, "embed_batch", fake_embed_batch)
 
     # ~450 words -> two sliding-window chunks (size 400, overlap 50).
     content = " ".join(f"word{i}" for i in range(450))
@@ -67,10 +70,34 @@ async def test_chunk_and_embed_inserts_one_row_per_chunk(monkeypatch, fake_pool,
         note_id="note-1", circle_id="circle-1", user_id="user-1", content=content
     )
 
+    # Both chunks are embedded in a single batched request...
+    assert len(batch_calls) == 1
+    assert len(batch_calls[0]) == 2
+    # ...and bulk-inserted, one row per chunk with the right note_id.
     inserts = fake_conn.statements_matching("INSERT INTO note_chunks")
     assert len(inserts) == 2
-    # note_id is the first bound parameter on each insert.
     assert all(args[0] == "note-1" for _, args in inserts)
+
+
+async def test_chunk_and_embed_no_chunks_skips_db(monkeypatch, fake_pool, fake_conn):
+    async def _get_pool():
+        return fake_pool
+    monkeypatch.setattr(embedding, "get_pool", _get_pool)
+
+    called = False
+    async def fake_embed_batch(texts):
+        nonlocal called
+        called = True
+        return []
+    monkeypatch.setattr(embedding, "embed_batch", fake_embed_batch)
+
+    # Too short to yield any embeddable chunk.
+    await embedding.chunk_and_embed(
+        note_id="note-1", circle_id="circle-1", user_id="user-1", content="tiny"
+    )
+
+    assert not called
+    assert not fake_conn.ran("INSERT INTO note_chunks")
 
 
 def test_semantic_chunk_drops_tiny_fragments():

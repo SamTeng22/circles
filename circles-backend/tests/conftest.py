@@ -29,6 +29,12 @@ class FakeConn:
         self.calls.append((sql, args))
         return "OK"
 
+    async def executemany(self, sql, args_seq):
+        # Record one call per row so tests can assert per-row bound params.
+        for args in args_seq:
+            self.calls.append((sql, tuple(args)))
+        return "OK"
+
     async def fetchrow(self, sql, *args):
         self.calls.append((sql, args))
         return self._fetchrow_queue.pop(0) if self._fetchrow_queue else None

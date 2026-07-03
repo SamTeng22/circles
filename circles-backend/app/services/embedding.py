@@ -11,6 +11,8 @@ genai.configure(api_key=settings.GEMINI_API_KEY)
 # pre-normalized, so we L2-normalize for stable similarity search.
 EMBED_MODEL = "models/gemini-embedding-001"
 EMBED_DIMS = 768
+# Max inputs to send to embed_content in a single request.
+EMBED_BATCH = 100
 
 
 def _normalize(vec: list[float]) -> list[float]:
@@ -42,6 +44,30 @@ async def embed_text(text: str) -> list[float]:
     # so background embedding never stalls the API server.
     return await asyncio.to_thread(_embed_sync, text)
 
+def _embed_batch_sync(texts: list[str]) -> list[list[float]]:
+    result = genai.embed_content(
+        model=EMBED_MODEL,
+        content=texts,
+        task_type="retrieval_document",
+        output_dimensionality=EMBED_DIMS,
+    )
+    return [_normalize(v) for v in result["embedding"]]
+
+async def embed_batch(texts: list[str]) -> list[list[float]]:
+    """Embed many chunks with as few Gemini round-trips as possible.
+
+    embed_content takes a list, so a whole note is one request instead of one
+    per chunk; we still chunk into EMBED_BATCH-sized requests to stay within the
+    API's per-request input cap.
+    """
+    if not texts:
+        return []
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), EMBED_BATCH):
+        batch = texts[start : start + EMBED_BATCH]
+        vectors.extend(await asyncio.to_thread(_embed_batch_sync, batch))
+    return vectors
+
 async def chunk_and_embed(
     note_id: str,
     circle_id: str,
@@ -49,16 +75,26 @@ async def chunk_and_embed(
     content: str,
 ):
     chunks = semantic_chunk(content)
+    if not chunks:
+        print(f"No embeddable chunks for note {note_id}")
+        return
+
+    embeddings = await embed_batch(chunks)
+    rows = [
+        (
+            note_id, circle_id, user_id, chunk_text,
+            "[" + ",".join(str(x) for x in embedding) + "]",
+        )
+        for chunk_text, embedding in zip(chunks, embeddings)
+    ]
+
     pool = await get_pool()
     async with pool.acquire() as conn:
-        for chunk_text in chunks:
-            embedding = await embed_text(chunk_text)
-            embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
-            await conn.execute(
-                """
-                INSERT INTO note_chunks (note_id, circle_id, user_id, content, embedding)
-                VALUES ($1, $2, $3, $4, $5::vector)
-                """,
-                note_id, circle_id, user_id, chunk_text, embedding_str,
-            )
+        await conn.executemany(
+            """
+            INSERT INTO note_chunks (note_id, circle_id, user_id, content, embedding)
+            VALUES ($1, $2, $3, $4, $5::vector)
+            """,
+            rows,
+        )
     print(f"Stored {len(chunks)} chunks for note {note_id}")

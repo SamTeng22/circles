@@ -82,6 +82,13 @@ async def init_db():
                 created_at TIMESTAMPTZ DEFAULT now()
             )
         """)
+        # ANN index so quiz/flashcard retrieval doesn't full-scan every chunk.
+        # vector_l2_ops matches the `<->` operator used in retrieve_chunks;
+        # embeddings are L2-normalized so L2 distance ranks like cosine.
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS note_chunks_embedding_idx
+            ON note_chunks USING hnsw (embedding vector_l2_ops)
+        """)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS conflicts (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
