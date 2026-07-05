@@ -123,3 +123,172 @@ def test_get_circle_404_for_nonexistent_circle(monkeypatch, fake_conn, fake_pool
     assert res.status_code == 404
     # Existence is checked before membership, so the membership query never runs.
     assert not fake_conn.ran("circle_members")
+
+
+# --- leave circle ----------------------------------------------------------
+
+def test_leave_circle_removes_membership(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool, user_id="user-2")
+    fake_conn.queue_fetchrow({"id": "c1", "owner_id": "user-1"})  # circle exists
+    fake_conn.queue_fetchrow({"circle_id": "c1", "user_id": "user-2"})  # is a member
+    fake_conn.queue_fetchrow({"?column?": 1})  # another member remains
+
+    res = client.delete("/api/c1/leave")
+
+    assert res.status_code == 200
+    assert res.json() == {"left": True, "circle_deleted": False}
+
+    delete_member = fake_conn.statements_matching("DELETE FROM circle_members")
+    assert delete_member[0][1] == ("c1", "user-2")
+    assert not fake_conn.ran("DELETE FROM circles")
+
+
+def test_leave_circle_deletes_circle_when_last_member(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool, user_id="user-1")
+    fake_conn.queue_fetchrow({"id": "c1", "owner_id": "user-1"})
+    fake_conn.queue_fetchrow({"circle_id": "c1", "user_id": "user-1"})
+    fake_conn.queue_fetchrow(None)  # no members remain
+
+    res = client.delete("/api/c1/leave")
+
+    assert res.status_code == 200
+    assert res.json() == {"left": True, "circle_deleted": True}
+    assert fake_conn.ran("DELETE FROM circles")
+
+
+def test_leave_circle_forbidden_for_non_member(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool, user_id="user-2")
+    fake_conn.queue_fetchrow({"id": "c1", "owner_id": "user-1"})
+    fake_conn.queue_fetchrow(None)  # not a member
+
+    res = client.delete("/api/c1/leave")
+
+    assert res.status_code == 403
+    assert not fake_conn.ran("DELETE FROM circle_members")
+
+
+def test_leave_circle_404_for_nonexistent_circle(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool, user_id="user-1")
+    fake_conn.queue_fetchrow(None)
+
+    res = client.delete("/api/does-not-exist/leave")
+
+    assert res.status_code == 404
+
+
+# --- remove member -----------------------------------------------------------
+
+def test_remove_member_by_owner(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool, user_id="user-1")
+    fake_conn.queue_fetchrow({"id": "c1", "owner_id": "user-1"})  # owner check
+    fake_conn.queue_fetchrow({"circle_id": "c1", "user_id": "user-2"})  # target is a member
+
+    res = client.delete("/api/c1/members/user-2")
+
+    assert res.status_code == 200
+    delete_member = fake_conn.statements_matching("DELETE FROM circle_members")
+    assert delete_member[0][1] == ("c1", "user-2")
+
+
+def test_remove_member_forbidden_for_non_owner(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool, user_id="user-2")
+    fake_conn.queue_fetchrow({"id": "c1", "owner_id": "user-1"})  # caller isn't owner
+
+    res = client.delete("/api/c1/members/user-3")
+
+    assert res.status_code == 403
+    assert not fake_conn.ran("DELETE FROM circle_members")
+
+
+def test_remove_member_404_when_target_not_a_member(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool, user_id="user-1")
+    fake_conn.queue_fetchrow({"id": "c1", "owner_id": "user-1"})
+    fake_conn.queue_fetchrow(None)  # target not a member
+
+    res = client.delete("/api/c1/members/user-3")
+
+    assert res.status_code == 404
+    assert not fake_conn.ran("DELETE FROM circle_members")
+
+
+# --- rename circle -----------------------------------------------------------
+
+def test_update_circle_renames_for_owner(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool, user_id="user-1")
+    fake_conn.queue_fetchrow({"id": "c1", "owner_id": "user-1"})  # owner check
+    fake_conn.queue_fetchrow({"id": "c1", "name": "New Name", "owner_id": "user-1"})
+
+    res = client.patch("/api/c1", json={"name": "New Name"})
+
+    assert res.status_code == 200
+    assert res.json()["name"] == "New Name"
+
+    update_sql, update_args = fake_conn.statements_matching("UPDATE circles SET name")[0]
+    assert update_args == ("New Name", "c1")
+
+
+def test_update_circle_forbidden_for_non_owner(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool, user_id="user-2")
+    fake_conn.queue_fetchrow({"id": "c1", "owner_id": "user-1"})
+
+    res = client.patch("/api/c1", json={"name": "New Name"})
+
+    assert res.status_code == 403
+    assert not fake_conn.ran("UPDATE circles SET name")
+
+
+# --- delete circle -------------------------------------------------------------
+
+def test_delete_circle_by_owner(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool, user_id="user-1")
+    fake_conn.queue_fetchrow({"id": "c1", "owner_id": "user-1"})
+
+    res = client.delete("/api/c1")
+
+    assert res.status_code == 200
+    delete_sql, delete_args = fake_conn.statements_matching("DELETE FROM circles")[0]
+    assert delete_args == ("c1",)
+
+
+def test_delete_circle_forbidden_for_non_owner(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool, user_id="user-2")
+    fake_conn.queue_fetchrow({"id": "c1", "owner_id": "user-1"})
+
+    res = client.delete("/api/c1")
+
+    assert res.status_code == 403
+    assert not fake_conn.ran("DELETE FROM circles")
+
+
+def test_delete_circle_404_for_nonexistent_circle(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool, user_id="user-1")
+    fake_conn.queue_fetchrow(None)
+
+    res = client.delete("/api/does-not-exist")
+
+    assert res.status_code == 404
+
+
+# --- regenerate invite ----------------------------------------------------------
+
+def test_regenerate_invite_by_owner(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool, user_id="user-1")
+    fake_conn.queue_fetchrow({"id": "c1", "owner_id": "user-1", "invite_code": "OLDCODE"})
+    fake_conn.queue_fetchrow({"id": "c1", "owner_id": "user-1", "invite_code": "NEWCODE"})
+
+    res = client.post("/api/c1/regenerate-invite")
+
+    assert res.status_code == 200
+    update_sql, update_args = fake_conn.statements_matching("UPDATE circles SET invite_code")[0]
+    assert update_args[1] == "c1"
+    assert update_args[0] != "OLDCODE"
+
+
+def test_regenerate_invite_forbidden_for_non_owner(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool, user_id="user-2")
+    fake_conn.queue_fetchrow({"id": "c1", "owner_id": "user-1", "invite_code": "OLDCODE"})
+
+    res = client.post("/api/c1/regenerate-invite")
+
+    assert res.status_code == 403
+    assert not fake_conn.ran("UPDATE circles SET invite_code")
