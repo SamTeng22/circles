@@ -103,15 +103,23 @@ def test_list_circles_only_returns_member_circles(monkeypatch, fake_conn, fake_p
 
 def test_get_circle_forbidden_for_non_member(monkeypatch, fake_conn, fake_pool):
     client = _client(monkeypatch, fake_pool, user_id="user-2")
-    fake_conn.queue_fetchrow(None)  # membership check comes back empty
+    fake_conn.queue_fetchrow({
+        "id": "c1", "name": "Study Group", "description": "",
+        "invite_code": "ABC123", "owner_id": "user-1",
+    })  # circle exists
+    fake_conn.queue_fetchrow(None)  # but the caller isn't a member
 
     res = client.get("/api/c1")
 
     assert res.status_code == 403
 
-# NOTE: no test for "404 on a nonexistent circle_id" here -- see the bug
-# reported separately. get_circle checks membership before existence, and
-# circle_members.circle_id is FK'd to circles(id), so a membership row can
-# never exist for a circle that doesn't exist. A nonexistent circle_id
-# therefore always yields 403 ("Not a member"), never 404. Writing a test
-# that asserts 404 here would just be asserting on wrong behavior.
+
+def test_get_circle_404_for_nonexistent_circle(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool, user_id="user-2")
+    fake_conn.queue_fetchrow(None)  # no circle with this id
+
+    res = client.get("/api/does-not-exist")
+
+    assert res.status_code == 404
+    # Existence is checked before membership, so the membership query never runs.
+    assert not fake_conn.ran("circle_members")

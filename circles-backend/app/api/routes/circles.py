@@ -80,13 +80,15 @@ async def get_circle(
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
+        circle = await conn.fetchrow("SELECT * FROM circles WHERE id = $1", circle_id)
+        if not circle:
+            raise HTTPException(status_code=404, detail="Circle not found")
         member = await conn.fetchrow(
             "SELECT * FROM circle_members WHERE circle_id = $1 AND user_id = $2",
             circle_id, current_user["id"],
         )
         if not member:
             raise HTTPException(status_code=403, detail="Not a member of this circle")
-        circle = await conn.fetchrow("SELECT * FROM circles WHERE id = $1", circle_id)
         members = await conn.fetch(
             """
             SELECT u.id, u.display_name, u.email FROM users u
