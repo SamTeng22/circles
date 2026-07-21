@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
 from app.api.routes import auth, circles, notes, quiz, live, flashcards
+from app.core.config import settings
 from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from app.db.database import init_db
 
@@ -14,7 +15,7 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://circles-9ez5.vercel.app", "https://staging-circles-sam-9d919e89.vercel.app", "circles-mocha-tau.vercel.app"],
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
