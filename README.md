@@ -61,6 +61,26 @@ npm run dev
 
 ---
 
+## Rate limits
+
+The expensive endpoints are rate limited **per authenticated user** (keyed on the
+Firebase-verified DB user id, not IP) via [`slowapi`](https://github.com/laurentS/slowapi).
+Exceeding a limit returns a `429` with a clear `detail` message rather than a 500.
+
+| Endpoint | Setting | Default |
+| --- | --- | --- |
+| `POST /api/quiz/generate` | `QUIZ_GENERATION_RATE_LIMIT` | `10/hour` |
+| `POST /api/flashcards/generate` | `FLASHCARD_GENERATION_RATE_LIMIT` | `10/hour` |
+| `POST /api/notes/{circle_id}/upload` | `NOTE_UPLOAD_RATE_LIMIT` | `20/hour` |
+
+Limits are read from `app/core/config.py` settings, so they can be retuned via
+environment variables without a redeploy (values are any
+[`limits`](https://limits.readthedocs.io/en/stable/quickstart.html#rate-limit-string-notation)
+string, e.g. `10/hour`, `5/minute`). Set `RATE_LIMIT_ENABLED=false` to disable
+rate limiting entirely (e.g. in local development).
+
+---
+
 ## Deploy
 
 ### Railway (backend)

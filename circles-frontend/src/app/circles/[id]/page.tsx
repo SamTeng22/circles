@@ -53,6 +53,23 @@ export default function CircleDetailPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [noteToDelete, setNoteToDelete] = useState<Note | null>(null);
 
+  // Circle management (settings surface)
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsError, setSettingsError] = useState("");
+  const [renaming, setRenaming] = useState(false);
+  const [nameInput, setNameInput] = useState("");
+  const [savingName, setSavingName] = useState(false);
+  const [regenNotice, setRegenNotice] = useState(false); // highlights the freshly issued code
+  // Confirmation flows (each destructive action requires an explicit confirm step)
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const [confirmRegen, setConfirmRegen] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+  const [memberToRemove, setMemberToRemove] = useState<{ id: string; display_name: string; email: string } | null>(null);
+  const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
+  const [confirmDeleteCircle, setConfirmDeleteCircle] = useState(false);
+  const [deletingCircle, setDeletingCircle] = useState(false);
+
   // Viewing / editing a note's extracted text
   const [viewNote, setViewNote] = useState<Note | null>(null);
   const [viewLoading, setViewLoading] = useState(false);
@@ -113,8 +130,107 @@ export default function CircleDetailPage() {
     [members, user?.email]
   );
 
+  const isOwner = myId != null && circle?.owner_id === myId;
+
   function canDelete(n: Note) {
     return myId != null && (n.user_id === myId || circle?.owner_id === myId);
+  }
+
+  function openSettings() {
+    setNameInput(circle?.name ?? "");
+    setRenaming(false);
+    setRegenNotice(false);
+    setSettingsError("");
+    setShowSettings(true);
+  }
+
+  function closeSettings() {
+    // Block closing while an irreversible action is mid-flight.
+    if (savingName || leaving || regenerating || removingMemberId || deletingCircle) return;
+    setShowSettings(false);
+  }
+
+  async function saveName() {
+    const name = nameInput.trim();
+    if (!circle || savingName) return;
+    if (!name || name === circle.name) {
+      setRenaming(false);
+      return;
+    }
+    setSavingName(true);
+    setSettingsError("");
+    try {
+      const updated = await circlesApi.rename(circle.id, name);
+      setCircle((prev) => (prev ? { ...prev, name: updated.name } : prev));
+      setAllCircles((prev) => prev.map((c) => (c.id === circle.id ? { ...c, name: updated.name } : c)));
+      setRenaming(false);
+    } catch (e: any) {
+      setSettingsError(e.message || "Failed to rename circle.");
+    } finally {
+      setSavingName(false);
+    }
+  }
+
+  async function doRegenerate() {
+    if (!circle || regenerating) return;
+    setRegenerating(true);
+    setSettingsError("");
+    try {
+      const updated = await circlesApi.regenerateInvite(circle.id);
+      setCircle((prev) => (prev ? { ...prev, invite_code: updated.invite_code } : prev));
+      setConfirmRegen(false);
+      setRegenNotice(true);
+    } catch (e: any) {
+      setSettingsError(e.message || "Failed to regenerate invite code.");
+    } finally {
+      setRegenerating(false);
+    }
+  }
+
+  async function doRemoveMember() {
+    const m = memberToRemove;
+    if (!circle || !m || removingMemberId) return;
+    setRemovingMemberId(m.id);
+    setSettingsError("");
+    try {
+      await circlesApi.removeMember(circle.id, m.id);
+      setCircle((prev) =>
+        prev ? { ...prev, members: (prev.members ?? []).filter((x) => x.id !== m.id) } : prev
+      );
+      setMemberToRemove(null);
+    } catch (e: any) {
+      setSettingsError(e.message || "Failed to remove member.");
+    } finally {
+      setRemovingMemberId(null);
+    }
+  }
+
+  async function doLeave() {
+    if (!circle || leaving) return;
+    setLeaving(true);
+    setSettingsError("");
+    try {
+      await circlesApi.leave(circle.id);
+      // No longer a member — the circle page would 403, so send them home.
+      router.push("/dashboard");
+    } catch (e: any) {
+      setSettingsError(e.message || "Failed to leave circle.");
+      setLeaving(false);
+    }
+  }
+
+  async function doDeleteCircle() {
+    if (!circle || deletingCircle) return;
+    setDeletingCircle(true);
+    setSettingsError("");
+    try {
+      await circlesApi.delete(circle.id);
+      // The circle no longer exists — redirect since this page can't render.
+      router.push("/dashboard");
+    } catch (e: any) {
+      setSettingsError(e.message || "Failed to delete circle.");
+      setDeletingCircle(false);
+    }
   }
 
   async function confirmDelete() {
@@ -336,6 +452,9 @@ export default function CircleDetailPage() {
               )}
             </div>
             <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-ghost btn-sm" onClick={openSettings}>
+                Settings
+              </button>
               <button className="btn btn-ghost btn-sm" onClick={() => setTab("notes")}>
                 Upload notes
               </button>
@@ -766,6 +885,281 @@ export default function CircleDetailPage() {
               </button>
               <button className="btn btn-dark btn-sm" onClick={confirmDelete} disabled={!!deletingId}>
                 {deletingId ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Circle settings / management modal */}
+      {showSettings && circle && (
+        <div className="modal-overlay" onClick={closeSettings}>
+          <div
+            className="modal"
+            style={{ maxWidth: 520, width: "min(520px, 92vw)", maxHeight: "88vh", overflowY: "auto" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3>Circle settings</h3>
+            {settingsError && <div className="auth-error">{settingsError}</div>}
+
+            {/* Name */}
+            <div className="field">
+              <label>Name</label>
+              {isOwner && renaming ? (
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    className="tinp"
+                    value={nameInput}
+                    onChange={(e) => setNameInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && saveName()}
+                    disabled={savingName}
+                    autoFocus
+                  />
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={saveName}
+                    disabled={savingName || !nameInput.trim()}
+                  >
+                    {savingName ? "Saving…" : "Save"}
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => {
+                      setRenaming(false);
+                      setNameInput(circle.name);
+                    }}
+                    disabled={savingName}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <span style={{ fontWeight: 600 }}>{circle.name}</span>
+                  {isOwner && (
+                    <button className="btn btn-ghost btn-sm" onClick={() => setRenaming(true)}>
+                      Rename
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Invite code */}
+            <div className="field">
+              <label>Invite code</label>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <span className="mono" style={{ fontWeight: 700, letterSpacing: ".12em", fontSize: 15 }}>
+                  {circle.invite_code}
+                </span>
+                {isOwner && (
+                  <button className="btn btn-ghost btn-sm" onClick={() => setConfirmRegen(true)}>
+                    Regenerate
+                  </button>
+                )}
+              </div>
+              {regenNotice && (
+                <p className="sub" style={{ fontSize: 12.5, margin: "8px 0 0", color: "var(--jade)" }}>
+                  New code issued — the previous one no longer works.
+                </p>
+              )}
+            </div>
+
+            {/* Members (owner only) */}
+            {isOwner && (
+              <div className="field">
+                <label>Members · {members.length}</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {members.map((m) => (
+                    <div
+                      key={m.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "8px 10px",
+                        borderRadius: 12,
+                        border: "1px solid var(--line)",
+                        background: "var(--paper)",
+                      }}
+                    >
+                      <span
+                        className="av"
+                        style={{
+                          width: 30,
+                          height: 30,
+                          borderRadius: "50%",
+                          display: "grid",
+                          placeItems: "center",
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: "#fff",
+                          fontFamily: "var(--font-mono), ui-monospace, monospace",
+                          flex: "none",
+                          background: circleColor(m.id),
+                        }}
+                      >
+                        {initials(m.display_name)}
+                      </span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {m.display_name}
+                          {m.id === circle.owner_id && (
+                            <span className="mono" style={{ fontSize: 10.5, color: "var(--ink-3)", marginLeft: 8, letterSpacing: ".1em" }}>
+                              OWNER
+                            </span>
+                          )}
+                        </div>
+                        <small className="mono" style={{ fontSize: 11, color: "var(--ink-3)" }}>{m.email}</small>
+                      </div>
+                      {m.id !== circle.owner_id && (
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setMemberToRemove(m)}
+                          disabled={removingMemberId === m.id}
+                        >
+                          {removingMemberId === m.id ? "Removing…" : "Remove"}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Danger zone */}
+            <div style={{ marginTop: 18, borderTop: "1px solid var(--line)", paddingTop: 16 }}>
+              <div className="eyebrow">Danger zone</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>Leave circle</div>
+                    <small className="sub" style={{ fontSize: 12.5 }}>
+                      You&apos;ll lose access to this circle&apos;s pooled notes.
+                    </small>
+                  </div>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setConfirmLeave(true)}>
+                    Leave
+                  </button>
+                </div>
+                {isOwner && (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>Delete circle</div>
+                      <small className="sub" style={{ fontSize: 12.5 }}>
+                        Permanently removes the circle and all its notes, quizzes and decks.
+                      </small>
+                    </div>
+                    <button className="btn btn-dark btn-sm" onClick={() => setConfirmDeleteCircle(true)}>
+                      Delete
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="modal-actions">
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={closeSettings}
+                disabled={!!(savingName || leaving || regenerating || removingMemberId || deletingCircle)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Regenerate invite confirmation */}
+      {confirmRegen && (
+        <div className="modal-overlay" onClick={() => !regenerating && setConfirmRegen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Regenerate invite code</h3>
+            <p className="sub" style={{ fontSize: 13.5, margin: "0 0 4px" }}>
+              This issues a brand-new code and <b>invalidates the current one</b>. Anyone with the old
+              code won&apos;t be able to join until you share the new one.
+            </p>
+            <div className="modal-actions">
+              <button className="btn btn-ghost btn-sm" onClick={() => setConfirmRegen(false)} disabled={regenerating}>
+                Cancel
+              </button>
+              <button className="btn btn-dark btn-sm" onClick={doRegenerate} disabled={regenerating}>
+                {regenerating ? "Regenerating…" : "Regenerate"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Remove member confirmation */}
+      {memberToRemove && (
+        <div className="modal-overlay" onClick={() => !removingMemberId && setMemberToRemove(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Remove member</h3>
+            <p className="sub" style={{ fontSize: 13.5, margin: "0 0 4px" }}>
+              Remove <b>{memberToRemove.display_name}</b> from this circle? They&apos;ll lose access
+              until they rejoin with the invite code.
+            </p>
+            <div className="modal-actions">
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setMemberToRemove(null)}
+                disabled={!!removingMemberId}
+              >
+                Cancel
+              </button>
+              <button className="btn btn-dark btn-sm" onClick={doRemoveMember} disabled={!!removingMemberId}>
+                {removingMemberId ? "Removing…" : "Remove"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Leave circle confirmation */}
+      {confirmLeave && (
+        <div className="modal-overlay" onClick={() => !leaving && setConfirmLeave(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Leave circle</h3>
+            <p className="sub" style={{ fontSize: 13.5, margin: "0 0 4px" }}>
+              Leave <b>{circle.name}</b>? You&apos;ll lose access to its pooled notes, quizzes and
+              decks. You can rejoin later with the invite code.
+              {isOwner && (
+                <> As the owner, note you won&apos;t be able to manage the circle after leaving.</>
+              )}
+            </p>
+            <div className="modal-actions">
+              <button className="btn btn-ghost btn-sm" onClick={() => setConfirmLeave(false)} disabled={leaving}>
+                Cancel
+              </button>
+              <button className="btn btn-dark btn-sm" onClick={doLeave} disabled={leaving}>
+                {leaving ? "Leaving…" : "Leave circle"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete circle confirmation */}
+      {confirmDeleteCircle && (
+        <div className="modal-overlay" onClick={() => !deletingCircle && setConfirmDeleteCircle(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Delete circle</h3>
+            <p className="sub" style={{ fontSize: 13.5, margin: "0 0 4px" }}>
+              Permanently delete <b>{circle.name}</b>? This removes the circle and <b>all</b> of its
+              notes, quizzes and flashcard decks for every member. This can&apos;t be undone.
+            </p>
+            <div className="modal-actions">
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setConfirmDeleteCircle(false)}
+                disabled={deletingCircle}
+              >
+                Cancel
+              </button>
+              <button className="btn btn-dark btn-sm" onClick={doDeleteCircle} disabled={deletingCircle}>
+                {deletingCircle ? "Deleting…" : "Delete circle"}
               </button>
             </div>
           </div>

@@ -1,7 +1,8 @@
 import asyncio
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks, Request
 from pydantic import BaseModel
 from app.core.firebase import get_current_user
+from app.core.rate_limit import limiter, identify_user, note_upload_limit
 from app.db.database import get_pool
 from app.services.embedding import chunk_and_embed
 from app.services import storage, extract
@@ -23,11 +24,13 @@ async def _assert_member(conn, circle_id: str, user_id) -> None:
 
 
 @router.post("/{circle_id}/upload")
+@limiter.limit(note_upload_limit)
 async def upload_notes(
+    request: Request,
     circle_id: str,
     background: BackgroundTasks,
     file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(identify_user),
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
