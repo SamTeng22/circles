@@ -1,7 +1,8 @@
 import json
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from app.core.firebase import get_current_user
+from app.core.rate_limit import limiter, identify_user, quiz_generation_limit
 from app.db.database import get_pool
 from app.services.quiz_generator import generate_quiz_questions
 
@@ -24,9 +25,11 @@ class GenerateQuizRequest(BaseModel):
     topic: str = ""
 
 @router.post("/generate")
+@limiter.limit(quiz_generation_limit)
 async def generate_quiz(
+    request: Request,
     body: GenerateQuizRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(identify_user),
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
