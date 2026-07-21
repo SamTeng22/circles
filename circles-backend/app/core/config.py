@@ -23,6 +23,21 @@ class Settings(BaseSettings):
     FLASHCARD_GENERATION_RATE_LIMIT: str = "10/hour"
     NOTE_UPLOAD_RATE_LIMIT: str = "20/hour"
 
+    # Origins allowed to call the API from a browser, as a comma-separated list.
+    # Kept as a string rather than list[str] because pydantic-settings decodes
+    # complex types from env as JSON, which would reject a plain comma list.
+    # Read it through `allowed_origins` below, never directly.
+    ALLOWED_ORIGINS: str = (
+        "http://localhost:3000,"
+        "https://circles-9ez5.vercel.app,"
+        "https://staging-circles-sam-9d919e89.vercel.app,"
+        "circles-mocha-tau.vercel.app"
+    )
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()]
+
     class Config:
         env_file = ".env"
 

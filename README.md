@@ -87,6 +87,11 @@ rate limiting entirely (e.g. in local development).
 - Connect your GitHub repo
 - Set environment variables from `.env.example`
 - Railway auto-detects the `Procfile`
+- When adding a new frontend domain (a Vercel preview or a custom domain), add it
+  to `ALLOWED_ORIGINS` — a comma-separated list of CORS origins, each including
+  the scheme (`https://…`). It defaults to the list in `app/core/config.py`, so
+  setting it in Railway replaces that list rather than extending it: include the
+  existing origins you still need alongside the new one.
 
 ### Vercel (frontend)
 - Connect your GitHub repo
