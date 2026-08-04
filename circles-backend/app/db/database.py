@@ -95,10 +95,34 @@ async def init_db():
                 circle_id UUID REFERENCES circles(id) ON DELETE CASCADE,
                 chunk_a_id UUID REFERENCES note_chunks(id) ON DELETE CASCADE,
                 chunk_b_id UUID REFERENCES note_chunks(id) ON DELETE CASCADE,
+                note_a_id UUID REFERENCES notes(id) ON DELETE CASCADE,
+                note_b_id UUID REFERENCES notes(id) ON DELETE CASCADE,
+                user_a_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                user_b_id UUID REFERENCES users(id) ON DELETE CASCADE,
                 explanation TEXT NOT NULL,
                 resolved BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMPTZ DEFAULT now()
             )
+        """)
+        # Migrations for databases created before conflict detection recorded
+        # which note/user each side of a conflict came from. Denormalized onto
+        # the row so listing conflicts doesn't need a four-way join back through
+        # note_chunks.
+        for column, ref in (
+            ("note_a_id", "notes(id)"),
+            ("note_b_id", "notes(id)"),
+            ("user_a_id", "users(id)"),
+            ("user_b_id", "users(id)"),
+        ):
+            await conn.execute(
+                f"ALTER TABLE conflicts ADD COLUMN IF NOT EXISTS {column} "
+                f"UUID REFERENCES {ref} ON DELETE CASCADE"
+            )
+        # Detection re-runs on every upload; keep a pair from being recorded
+        # twice (the insert relies on this for ON CONFLICT DO NOTHING).
+        await conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS conflicts_chunk_pair_idx
+            ON conflicts (chunk_a_id, chunk_b_id)
         """)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS quizzes (
