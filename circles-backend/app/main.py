@@ -1,10 +1,14 @@
-from fastapi import FastAPI
+import logging
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 from app.api.routes import auth, circles, notes, quiz, live, flashcards
 from app.core.config import settings
 from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from app.db.database import init_db
+
+logger = logging.getLogger("uvicorn.error")
 
 app = FastAPI(title="Circles API", version="1.0.0")
 
@@ -12,6 +16,21 @@ app = FastAPI(title="Circles API", version="1.0.0")
 # and RateLimitExceeded is turned into a clean 429 instead of a 500.
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Turn unhandled errors into a normal 500 response.
+
+    Without this, an unhandled exception is caught by Starlette's outermost
+    ServerErrorMiddleware, which sits *outside* CORSMiddleware — so the 500 it
+    returns has no Access-Control-Allow-Origin header. Browsers then report
+    that as a CORS failure, masking the real error. Registering a handler here
+    routes it through ExceptionMiddleware instead, which is inside
+    CORSMiddleware, so the response gets CORS headers like any other.
+    """
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 app.add_middleware(
     CORSMiddleware,
