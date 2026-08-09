@@ -17,7 +17,7 @@ async def _init_connection(conn):
 async def get_pool():
     global _pool
     if _pool is None:
-        _pool = await asyncpg.create_pool(settings.DATABASE_URL, init=_init_connection)
+        _pool = await asyncpg.create_pool(settings.DATABASE_URL, init=_init_connection, statement_cache_size=0)
     return _pool
 
 async def init_db():
