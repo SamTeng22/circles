@@ -78,13 +78,10 @@ async def list_circle_quizzes(
         )
     return [dict(q) for q in quizzes]
 
-class QuizSubmission(BaseModel):
-    answers: dict[str, str]  # Mapping of question index to selected answer
-
 @router.post("/{quiz_id}/submit")
 async def submit_quiz(
     quiz_id: str,
-    body: QuizSubmission,
+    answers: dict[str, str],  # raw body: mapping of question index to selected answer
     current_user: dict = Depends(get_current_user),
 ):
     pool = await get_pool()
@@ -94,19 +91,19 @@ async def submit_quiz(
             raise HTTPException(status_code=404, detail="Quiz not found")
         await _assert_member(conn, quiz["circle_id"], current_user["id"])
         questions = json.loads(quiz["questions"]) if isinstance(quiz["questions"], str) else quiz["questions"]
-        
-        if len(body.answers) > len(questions) or any(len(v) > 1000  for v in body.answers.values()):
+
+        if len(answers) > len(questions) or any(len(v) > 1000 for v in answers.values()):
             raise HTTPException(status_code=400, detail="Invalid answers payload")
-        
+
         score = sum(
             1 for i, q in enumerate(questions)
-            if body.answers.get(str(i)) == q.get("correct_answer")
+            if answers.get(str(i)) == q.get("correct_answer")
         )
         result = await conn.fetchrow(
             """
             INSERT INTO quiz_scores (quiz_id, user_id, score, answers)
             VALUES ($1, $2, $3, $4::jsonb) RETURNING *
             """,
-            quiz_id, current_user["id"], score, body.answers,
+            quiz_id, current_user["id"], score, answers,
         )
     return {"score": score, "total": len(questions), "result_id": str(result["id"])}
