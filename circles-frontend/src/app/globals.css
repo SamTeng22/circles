@@ -289,14 +289,6 @@ footer { border-top: 1px solid var(--line); background: var(--surface); }
 .auth-aside-body { position: relative; z-index: 2; max-width: 400px; }
 .auth-aside-body h2 { font-size: 34px; line-height: 1.12; letter-spacing: -.02em; margin: 0 0 16px; }
 .auth-aside-body p { color: rgba(255,255,255,.72); font-size: 16px; margin: 0 0 30px; }
-.auth-quote {
-  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1);
-  border-radius: 18px; padding: 18px 20px; position: relative; z-index: 2;
-}
-.auth-quote p { font-size: 14.5px; color: rgba(255,255,255,.9); margin: 0 0 12px; line-height: 1.5; }
-.auth-quote .by { display: flex; align-items: center; gap: 10px; }
-.auth-quote .by .av { width: 32px; height: 32px; border-radius: 50%; background: var(--jade); display: grid; place-items: center; font-family: var(--font-mono), ui-monospace, monospace; font-weight: 700; font-size: 12px; }
-.auth-quote .by small { font-family: var(--font-mono), ui-monospace, monospace; font-size: 11px; color: rgba(255,255,255,.6); }
 .auth-aside-rings {
   position: absolute; right: -60px; top: 50%; transform: translateY(-50%);
   width: 340px; height: 340px; opacity: .85; pointer-events: none;

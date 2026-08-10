@@ -170,15 +170,6 @@ export default function LandingPage() {
         </div>
       </header>
 
-      {/* TRUST ROW */}
-      <div className="trust">
-        <span><b>4,200+</b> study circles</span>
-        <span className="sep" />
-        <span><b>11</b> universities piloting</span>
-        <span className="sep" />
-        <span><b>320k</b> notes merged this term</span>
-      </div>
-
       {/* HOW IT WORKS */}
       <section className="block" id="how">
         <div className="sec-head">

@@ -118,16 +118,6 @@ export default function LoginPage() {
         <div className="auth-aside-body">
           <h2>Welcome back to your circles.</h2>
           <p>Pick up where your group left off — verified notes, fresh quizzes, and whoever's online for a live round.</p>
-          <div className="auth-quote">
-            <p>"We stopped arguing over whose notes were right. Circles just shows us the split and we move on."</p>
-            <div className="by">
-              <span className="av">MA</span>
-              <div>
-                <div style={{ fontSize: "13px", fontWeight: 600 }}>Maya A.</div>
-                <small>Cell Biology circle</small>
-              </div>
-            </div>
-          </div>
         </div>
         <div style={{ position: "relative", zIndex: 2, fontFamily: "var(--font-mono), ui-monospace, monospace", fontSize: "11.5px", color: "rgba(255,255,255,.45)" }}>
           © 2026 Circles

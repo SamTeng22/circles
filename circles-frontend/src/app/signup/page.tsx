@@ -139,16 +139,6 @@ function SignupForm() {
         <div className="auth-aside-body">
           <h2>One account.<br />Every study group you're in.</h2>
           <p>Create a circle for each class, pool notes with your group, and never study from one person's half-finished notes again.</p>
-          <div className="auth-quote">
-            <p>"Set up our first circle in a minute, uploaded notes, and had a live quiz running before our study session even started."</p>
-            <div className="by">
-              <span className="av" style={{ background: "var(--violet)" }}>DG</span>
-              <div>
-                <div style={{ fontSize: "13px", fontWeight: 600 }}>Diego G.</div>
-                <small>Organic Chem circle</small>
-              </div>
-            </div>
-          </div>
         </div>
         <div style={{ position: "relative", zIndex: 2, fontFamily: "var(--font-mono), ui-monospace, monospace", fontSize: "11.5px", color: "rgba(255,255,255,.45)" }}>
           © 2026 Circles
