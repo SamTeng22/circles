@@ -6,6 +6,8 @@ Study together. Quiz together.
 
 This is a work-in-progress collaborative study platform where students can upload notes and get specialized quizzes and flashcards in return. Currently, the notes uploading and quiz/flashcard generation are already functional with set maximum sizes for each. Current features being developed are the conflict detection between notes and the live quiz feature. Future iterations will also see improved formatting, divided topics per circle, and a leaderboard feature.
 
+https://circles-mocha-tau.vercel.app/
+
 ## Stack
 
 **Frontend**: Next.js 14 + TypeScript + Tailwind + Firebase Auth  
