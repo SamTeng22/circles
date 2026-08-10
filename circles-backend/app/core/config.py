@@ -36,7 +36,7 @@ class Settings(BaseSettings):
         "http://localhost:3000,"
         "https://circles-9ez5.vercel.app,"
         "https://staging-circles-sam-9d919e89.vercel.app,"
-        "circles-mocha-tau.vercel.app"
+        "https://circles-mocha-tau.vercel.app"
     )
 
     @property
