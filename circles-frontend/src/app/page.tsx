@@ -235,8 +235,8 @@ export default function LandingPage() {
             <div className="recon">
               <span className="recon-ic" style={{ background: "var(--persimmon)" }}>!</span>
               <div>
-                <p>Where does the Krebs cycle happen? <b>4 of 5</b> say mitochondrial matrix; 1 says inner membrane.</p>
-                <p className="kept">kept: <b>mitochondrial matrix</b> · 1 note overruled</p>
+                <p>Where does the Krebs cycle happen? <b>3 of 5</b> say mitochondrial matrix; 2 say inner membrane.</p>
+                <p className="kept">kept: <b>mitochondrial matrix</b> · 2 notes overruled</p>
               </div>
             </div>
             <div className="recon">
