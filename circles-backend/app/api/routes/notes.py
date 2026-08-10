@@ -6,10 +6,23 @@ from app.core.firebase import get_current_user
 from app.core.rate_limit import limiter, identify_user, note_upload_limit
 from app.db.database import get_pool
 from app.services.embedding import chunk_and_embed
+from app.services.conflict_detector import detect_conflicts_for_note
 from app.services import storage, extract
 
 router = APIRouter()
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
+
+async def _detect_conflicts(note_id: str, circle_id: str) -> None:
+    """Run conflict detection without letting it fail the note it ran for.
+
+    The note is already 'ready' by this point — its text and embeddings are
+    stored — so a Gemini or DB hiccup here must not flip it to 'failed'.
+    """
+    try:
+        await detect_conflicts_for_note(note_id, circle_id)
+    except Exception as e:
+        print(f"Conflict detection failed for {note_id}: {e}")
+
 
 class NoteContentUpdate(BaseModel):
     content: str = Field(max_length=500_000) # ~500KB of text
@@ -137,6 +150,10 @@ async def _process_note(
                 str(e)[:500], note_id,
             )
         print(f"Note processing failed for {note_id}: {e}")
+        return
+
+    # Only worth running once this note actually has chunks to compare.
+    await _detect_conflicts(note_id, circle_id)
 
 
 @router.get("/file/{note_id}")
@@ -207,6 +224,11 @@ async def _reembed_note(note_id: str, circle_id: str, user_id: str, content: str
                 str(e)[:500], note_id,
             )
         print(f"Note re-embedding failed for {note_id}: {e}")
+        return
+
+    # Chunk ids changed, so the note's old conflicts cascade-deleted with them;
+    # re-detect against the edited text.
+    await _detect_conflicts(note_id, circle_id)
 
 
 @router.put("/{circle_id}/{note_id}/content")
