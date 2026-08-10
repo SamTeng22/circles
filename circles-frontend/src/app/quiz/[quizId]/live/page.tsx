@@ -83,8 +83,9 @@ export default function LiveQuizPage() {
         if (msg.phase) setPhase(msg.phase);
         break;
 
-      case "question_start":
-        setPhase("question");
+      case "question_start": {
+        const isFinished = msg.question_index >= totalQuestions;
+        setPhase(isFinished ? "finished" : "question");
         setQuestionIndex(msg.question_index);
         setSelectedAnswer(null);
         setAnswerResult(null);
@@ -93,6 +94,7 @@ export default function LiveQuizPage() {
         if (msg.leaderboard) setLeaderboard(msg.leaderboard);
         stopCountdown();
         break;
+      }
 
       case "answer_received":
         if (msg.user_id === userId) {
@@ -114,16 +116,6 @@ export default function LiveQuizPage() {
       case "chat_message":
         setChatMessages((prev) => [...prev, msg]);
         break;
-
-      case "question_start":
-        setPhase("finished");
-        setLeaderboard(msg.leaderboard ?? []);
-        break;
-    }
-
-    // Detect finished (past last question)
-    if (msg.type === "question_start" && msg.question_index >= totalQuestions) {
-      setPhase("finished");
     }
   }
 

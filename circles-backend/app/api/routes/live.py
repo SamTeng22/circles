@@ -59,6 +59,7 @@ async def live_quiz_ws(websocket: WebSocket, quiz_id: str, user_id: str):
                     "user_id": user_id,
                     "display_name": room.display_names[user_id],
                     "participants": _participants(room),
+                    "host_id": room.host_id,
                 })
 
             # --- Host starts quiz ---
@@ -140,6 +141,7 @@ async def live_quiz_ws(websocket: WebSocket, quiz_id: str, user_id: str):
             "user_id": user_id,
             "participants": _participants(room),
             "scores": room.scores,
+            "host_id": room.host_id,
         })
         if not room.connections:
             if room.next_question_task:

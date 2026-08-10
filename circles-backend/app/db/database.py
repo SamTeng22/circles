@@ -17,7 +17,7 @@ async def _init_connection(conn):
 async def get_pool():
     global _pool
     if _pool is None:
-        _pool = await asyncpg.create_pool(settings.DATABASE_URL, init=_init_connection)
+        _pool = await asyncpg.create_pool(settings.DATABASE_URL, init=_init_connection, statement_cache_size=0, min_size=2, max_size=20)
     return _pool
 
 async def init_db():
@@ -71,6 +71,11 @@ async def init_db():
         await conn.execute(
             "ALTER TABLE notes ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ"
         )
+        # circle_id has no index by default (FKs don't create one); the
+        # per-circle storage quota check filters on it on every upload.
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS notes_circle_id_idx ON notes (circle_id)"
+        )
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS note_chunks (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -89,16 +94,45 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS note_chunks_embedding_idx
             ON note_chunks USING hnsw (embedding vector_l2_ops)
         """)
+        # Same reasoning as notes_circle_id_idx: the storage quota check sums
+        # chunk bytes per circle on every upload.
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS note_chunks_circle_id_idx ON note_chunks (circle_id)"
+        )
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS conflicts (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 circle_id UUID REFERENCES circles(id) ON DELETE CASCADE,
                 chunk_a_id UUID REFERENCES note_chunks(id) ON DELETE CASCADE,
                 chunk_b_id UUID REFERENCES note_chunks(id) ON DELETE CASCADE,
+                note_a_id UUID REFERENCES notes(id) ON DELETE CASCADE,
+                note_b_id UUID REFERENCES notes(id) ON DELETE CASCADE,
+                user_a_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                user_b_id UUID REFERENCES users(id) ON DELETE CASCADE,
                 explanation TEXT NOT NULL,
                 resolved BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMPTZ DEFAULT now()
             )
+        """)
+        # Migrations for databases created before conflict detection recorded
+        # which note/user each side of a conflict came from. Denormalized onto
+        # the row so listing conflicts doesn't need a four-way join back through
+        # note_chunks.
+        for column, ref in (
+            ("note_a_id", "notes(id)"),
+            ("note_b_id", "notes(id)"),
+            ("user_a_id", "users(id)"),
+            ("user_b_id", "users(id)"),
+        ):
+            await conn.execute(
+                f"ALTER TABLE conflicts ADD COLUMN IF NOT EXISTS {column} "
+                f"UUID REFERENCES {ref} ON DELETE CASCADE"
+            )
+        # Detection re-runs on every upload; keep a pair from being recorded
+        # twice (the insert relies on this for ON CONFLICT DO NOTHING).
+        await conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS conflicts_chunk_pair_idx
+            ON conflicts (chunk_a_id, chunk_b_id)
         """)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS quizzes (

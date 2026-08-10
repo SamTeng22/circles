@@ -1,7 +1,8 @@
 import json
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 from app.core.firebase import get_current_user
+from app.core.rate_limit import limiter, identify_user, quiz_generation_limit
 from app.db.database import get_pool
 from app.services.quiz_generator import generate_quiz_questions
 
@@ -20,13 +21,15 @@ async def _assert_member(conn, circle_id, user_id) -> None:
 class GenerateQuizRequest(BaseModel):
     circle_id: str
     title: str
-    num_questions: int = 5
+    num_questions: int = Field(default=5, ge=1, le=30)
     topic: str = ""
 
 @router.post("/generate")
+@limiter.limit(quiz_generation_limit)
 async def generate_quiz(
+    request: Request,
     body: GenerateQuizRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(identify_user),
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -78,7 +81,7 @@ async def list_circle_quizzes(
 @router.post("/{quiz_id}/submit")
 async def submit_quiz(
     quiz_id: str,
-    answers: dict,
+    answers: dict[str, str],  # raw body: mapping of question index to selected answer
     current_user: dict = Depends(get_current_user),
 ):
     pool = await get_pool()
@@ -88,6 +91,10 @@ async def submit_quiz(
             raise HTTPException(status_code=404, detail="Quiz not found")
         await _assert_member(conn, quiz["circle_id"], current_user["id"])
         questions = json.loads(quiz["questions"]) if isinstance(quiz["questions"], str) else quiz["questions"]
+
+        if len(answers) > len(questions) or any(len(v) > 1000 for v in answers.values()):
+            raise HTTPException(status_code=400, detail="Invalid answers payload")
+
         score = sum(
             1 for i, q in enumerate(questions)
             if answers.get(str(i)) == q.get("correct_answer")

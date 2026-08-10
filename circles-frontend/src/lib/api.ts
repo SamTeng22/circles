@@ -43,6 +43,15 @@ export const circlesApi = {
     api.post<Circle>("/api/circles/", { name, description }),
   join: (invite_code: string) =>
     api.post<Circle>("/api/circles/join", { invite_code }),
+  leave: (id: string) =>
+    api.del<{ left: boolean; circle_deleted: boolean }>(`/api/circles/${id}/leave`),
+  removeMember: (id: string, userId: string) =>
+    api.del<{ removed: boolean }>(`/api/circles/${id}/members/${userId}`),
+  rename: (id: string, name: string) =>
+    request<Circle>("PATCH", `/api/circles/${id}`, { name }),
+  delete: (id: string) => api.del<{ deleted: boolean }>(`/api/circles/${id}`),
+  regenerateInvite: (id: string) =>
+    request<Circle>("POST", `/api/circles/${id}/regenerate-invite`),
 };
 
 export const notesApi = {

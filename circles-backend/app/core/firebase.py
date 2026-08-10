@@ -43,6 +43,8 @@ async def get_current_user(
                 """
                 INSERT INTO users (firebase_uid, email, display_name)
                 VALUES ($1, $2, $3)
+                ON CONFLICT (email) DO UPDATE
+                SET firebase_uid = EXCLUDED.firebase_uid
                 RETURNING *
                 """,
                 decoded["uid"],
