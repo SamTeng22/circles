@@ -1,6 +1,7 @@
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from app.core.config import settings
 from app.core.firebase import get_current_user
 from app.core.rate_limit import limiter, identify_user, note_upload_limit
 from app.db.database import get_pool
@@ -8,10 +9,10 @@ from app.services.embedding import chunk_and_embed
 from app.services import storage, extract
 
 router = APIRouter()
-
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
 
 class NoteContentUpdate(BaseModel):
-    content: str
+    content: str = Field(max_length=500_000) # ~500KB of text
 
 
 async def _assert_member(conn, circle_id: str, user_id) -> None:
@@ -21,6 +22,37 @@ async def _assert_member(conn, circle_id: str, user_id) -> None:
     )
     if not member:
         raise HTTPException(status_code=403, detail="Not a member of this circle")
+
+
+async def _assert_under_quota(conn, circle_id: str) -> None:
+    """Block new uploads once a circle's actual Postgres footprint (extracted
+    text + chunk text/embeddings) is at or over the beta storage quota.
+
+    Deliberately not based on notes.size_bytes (the raw uploaded file size) -
+    that measures S3 usage, a separate budget from Neon's. This checks what's
+    already landed in Postgres and gates the *next* upload; it doesn't try to
+    pre-estimate the incoming file's eventual extracted size.
+    """
+    row = await conn.fetchrow(
+        """
+        SELECT
+            COALESCE((SELECT SUM(octet_length(content)) FROM notes
+                      WHERE circle_id = $1), 0)
+            +
+            COALESCE((SELECT SUM(octet_length(content) + 3072) FROM note_chunks
+                      WHERE circle_id = $1), 0) AS used_bytes
+        """,
+        circle_id,
+    )
+    if row["used_bytes"] >= settings.CIRCLE_STORAGE_QUOTA_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "This circle has reached its beta storage quota "
+                f"({settings.CIRCLE_STORAGE_QUOTA_BYTES // (1024 * 1024)}MB). "
+                "Delete some notes to free up space before uploading more."
+            ),
+        )
 
 
 @router.post("/{circle_id}/upload")
@@ -35,8 +67,14 @@ async def upload_notes(
     pool = await get_pool()
     async with pool.acquire() as conn:
         await _assert_member(conn, circle_id, current_user["id"])
+        await _assert_under_quota(conn, circle_id)
 
     data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large (max {MAX_UPLOAD_BYTES / 1024 / 1024} MB)",
+        )
     content_type = file.content_type or "application/octet-stream"
 
     # 1. Store the original file in object storage (source of truth).
@@ -80,6 +118,7 @@ async def _process_note(
     try:
         # extract_text does blocking PDF rendering / OCR; keep it off the loop.
         text = await asyncio.to_thread(extract.extract_text, data, content_type, filename)
+        text = text[:500_000]  # truncate to ~500KB for storage/embedding
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE notes SET content = $1 WHERE id = $2", text, note_id

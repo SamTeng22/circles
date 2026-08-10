@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     FLASHCARD_GENERATION_RATE_LIMIT: str = "10/hour"
     NOTE_UPLOAD_RATE_LIMIT: str = "20/hour"
 
+    # Cap on a circle's total Postgres footprint (notes.content + note_chunks
+    # text/embeddings), checked before accepting a new upload. Sized for the
+    # beta's Neon free-tier 0.5GB budget across ~10-25 concurrent circles.
+    CIRCLE_STORAGE_QUOTA_BYTES: int = 12 * 1024 * 1024
+
     # Origins allowed to call the API from a browser, as a comma-separated list.
     # Kept as a string rather than list[str] because pydantic-settings decodes
     # complex types from env as JSON, which would reject a plain comma list.

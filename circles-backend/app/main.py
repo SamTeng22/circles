@@ -6,7 +6,7 @@ from slowapi.errors import RateLimitExceeded
 from app.api.routes import auth, circles, notes, quiz, live, flashcards
 from app.core.config import settings
 from app.core.rate_limit import limiter, rate_limit_exceeded_handler
-from app.db.database import init_db
+from app.db.database import get_pool, init_db
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -54,3 +54,12 @@ app.include_router(live.router, prefix="/api/live", tags=["live"])
 @app.get("/")
 def root():
     return {"message": "Circles API is running"}
+
+@app.get("/health/db")
+async def health_db():
+    """Round-trips Postgres so latency/connectivity checks reflect the real
+    Railway-to-Neon path, not just the app server responding."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.fetchval("SELECT 1")
+    return {"status": "ok"}

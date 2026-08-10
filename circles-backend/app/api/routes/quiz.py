@@ -1,6 +1,6 @@
 import json
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.core.firebase import get_current_user
 from app.core.rate_limit import limiter, identify_user, quiz_generation_limit
 from app.db.database import get_pool
@@ -21,7 +21,7 @@ async def _assert_member(conn, circle_id, user_id) -> None:
 class GenerateQuizRequest(BaseModel):
     circle_id: str
     title: str
-    num_questions: int = 5
+    num_questions: int = Field(default=5, ge=1, le=30)
     topic: str = ""
 
 @router.post("/generate")
@@ -78,10 +78,13 @@ async def list_circle_quizzes(
         )
     return [dict(q) for q in quizzes]
 
+class QuizSubmission(BaseModel):
+    answers: dict[str, str]  # Mapping of question index to selected answer
+
 @router.post("/{quiz_id}/submit")
 async def submit_quiz(
     quiz_id: str,
-    answers: dict,
+    body: QuizSubmission,
     current_user: dict = Depends(get_current_user),
 ):
     pool = await get_pool()
@@ -91,15 +94,19 @@ async def submit_quiz(
             raise HTTPException(status_code=404, detail="Quiz not found")
         await _assert_member(conn, quiz["circle_id"], current_user["id"])
         questions = json.loads(quiz["questions"]) if isinstance(quiz["questions"], str) else quiz["questions"]
+        
+        if len(body.answers) > len(questions) or any(len(v) > 1000  for v in body.answers.values()):
+            raise HTTPException(status_code=400, detail="Invalid answers payload")
+        
         score = sum(
             1 for i, q in enumerate(questions)
-            if answers.get(str(i)) == q.get("correct_answer")
+            if body.answers.get(str(i)) == q.get("correct_answer")
         )
         result = await conn.fetchrow(
             """
             INSERT INTO quiz_scores (quiz_id, user_id, score, answers)
             VALUES ($1, $2, $3, $4::jsonb) RETURNING *
             """,
-            quiz_id, current_user["id"], score, answers,
+            quiz_id, current_user["id"], score, body.answers,
         )
     return {"score": score, "total": len(questions), "result_id": str(result["id"])}

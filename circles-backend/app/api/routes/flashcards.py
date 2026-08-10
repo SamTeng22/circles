@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.core.firebase import get_current_user
 from app.core.rate_limit import limiter, identify_user, flashcard_generation_limit
 from app.db.database import get_pool
@@ -20,7 +20,7 @@ async def _assert_member(conn, circle_id, user_id) -> None:
 class GenerateDeckRequest(BaseModel):
     circle_id: str
     title: str
-    num_cards: int = 10
+    num_cards: int = Field(default=10, ge=1, le=50)
     topic: str = ""
 
 @router.post("/generate")

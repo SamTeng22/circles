@@ -71,6 +71,11 @@ async def init_db():
         await conn.execute(
             "ALTER TABLE notes ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ"
         )
+        # circle_id has no index by default (FKs don't create one); the
+        # per-circle storage quota check filters on it on every upload.
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS notes_circle_id_idx ON notes (circle_id)"
+        )
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS note_chunks (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -89,6 +94,11 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS note_chunks_embedding_idx
             ON note_chunks USING hnsw (embedding vector_l2_ops)
         """)
+        # Same reasoning as notes_circle_id_idx: the storage quota check sums
+        # chunk bytes per circle on every upload.
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS note_chunks_circle_id_idx ON note_chunks (circle_id)"
+        )
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS conflicts (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
