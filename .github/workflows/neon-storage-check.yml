@@ -1,0 +1,28 @@
+name: Neon storage check
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"  # every 6 hours
+  workflow_dispatch: {}
+
+jobs:
+  check-storage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Neon project storage usage
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
+        run: |
+          USED_BYTES=$(curl -s -H "Authorization: Bearer $NEON_API_KEY" \
+            "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID" \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['project']['synthetic_storage_size'])")
+          QUOTA_BYTES=$((512 * 1024 * 1024))
+          PERCENT=$(python3 -c "print(round($USED_BYTES / $QUOTA_BYTES * 100, 1))")
+
+          echo "Neon project storage: ${USED_BYTES} bytes (${PERCENT}% of the 0.5GB free-tier cap)"
+
+          if (( $(python3 -c "print(1 if $PERCENT >= 80 else 0)") )); then
+            echo "::error::Neon project storage at ${PERCENT}% of the 0.5GB free-tier cap (shared across all branches) - free up space or upgrade before writes start failing app-wide."
+            exit 1
+          fi
