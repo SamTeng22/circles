@@ -1,12 +1,30 @@
-# Circles
+# <img src="assets/circles-pig-transparent.gif" width="32" height="32" align="center" alt="Circles logo"> Circles
 
 Study together. Quiz together.
+
+![Live quiz question generated from pooled notes](assets/quiz-live.png)
+
+This is a work-in-progress collaborative study platform where students can upload notes and get specialized quizzes and flashcards in return. Currently, the notes uploading and quiz/flashcard generation are already functional with set maximum sizes for each. Current features being developed are the conflict detection between notes and the live quiz feature. Future iterations will also see improved formatting, divided topics per circle, and a leaderboard feature.
 
 ## Stack
 
 **Frontend**: Next.js 14 + TypeScript + Tailwind + Firebase Auth  
 **Backend**: FastAPI + PostgreSQL + pgvector + Gemini 1.5 Flash  
 **Deploy**: Vercel (frontend) + Railway (backend)
+
+---
+
+## How it works
+
+1. Extracting - Once the notes are uploaded, the file type is checked to determine how to process the data. For PDFs, it scans the text layer via **pypdfium**, and if it gives less than 100 characters, it infers that it's a photo and falls back to using Optical Character Recognition (OCR) with Gemini's vision model. Image file types are also processed using the same method, while text types are decoded by UTF-8.
+
+2. Chunking - Sliding window of 400 words per chunk and 50 word overlap is used. Overlap is added to account for facts getting cut in half between chunks. May be replaced by semantic chunking in the future.
+
+3. Embedding - Uses gemini-embedding-001 with 768 dimensions. While 3072 is the default of the model, 768 saves us 4x the memory and gives us a faster search in exchange for a little accuracy.
+
+4. Storage - Chunks are stored in a vector column and Hierarchical Navigable Small World (HNSW) indexing.
+
+5. Retrieval - If a topic is provided during quiz generations, it compares the topic with the chunks belonging in the circle, and gets the k-most relevant chunks. Else, it gets an arbitrary first k-chunks. 
 
 ---
 
@@ -106,21 +124,27 @@ rate limiting entirely (e.g. in local development).
 circles/
 ├── circles-backend/
 │   ├── app/
-│   │   ├── main.py              # FastAPI entry point
+│   │   ├── main.py                # FastAPI entry point
 │   │   ├── core/
-│   │   │   ├── config.py        # Settings / env vars
-│   │   │   └── firebase.py      # Auth dependency
+│   │   │   ├── config.py          # Settings / env vars
+│   │   │   ├── firebase.py        # Auth dependency
+│   │   │   └── rate_limit.py      # Per-user rate limiting (slowapi)
 │   │   ├── db/
-│   │   │   └── database.py      # DB pool + schema init
+│   │   │   └── database.py        # DB pool + schema init
 │   │   ├── api/routes/
-│   │   │   ├── auth.py          # /api/auth
-│   │   │   ├── circles.py       # /api/circles
-│   │   │   ├── notes.py         # /api/notes
-│   │   │   ├── quiz.py          # /api/quiz
-│   │   │   └── live.py          # WebSocket /api/live/ws
+│   │   │   ├── auth.py            # /api/auth
+│   │   │   ├── circles.py         # /api/circles
+│   │   │   ├── notes.py           # /api/notes
+│   │   │   ├── quiz.py            # /api/quiz
+│   │   │   ├── flashcards.py      # /api/flashcards
+│   │   │   └── live.py            # WebSocket /api/live/ws
 │   │   └── services/
-│   │       ├── embedding.py     # Chunking + pgvector
-│   │       └── quiz_generator.py # RAG + Gemini
+│   │       ├── extract.py           # PDF/OCR/text extraction
+│   │       ├── embedding.py         # Chunking + pgvector
+│   │       ├── quiz_generator.py    # RAG + Gemini quiz generation
+│   │       ├── flashcard_generator.py # RAG + Gemini flashcard generation
+│   │       ├── conflict_detector.py # Cross-note conflict detection
+│   │       └── storage.py           # File storage
 │   ├── requirements.txt
 │   └── Procfile
 │
@@ -128,20 +152,29 @@ circles/
     ├── src/
     │   ├── app/
     │   │   ├── layout.tsx
-    │   │   ├── page.tsx          # Login
-    │   │   └── dashboard/page.tsx # Circles list
+    │   │   ├── page.tsx                     # Landing page
+    │   │   ├── login/page.tsx
+    │   │   ├── signup/page.tsx
+    │   │   ├── dashboard/page.tsx           # Circles list
+    │   │   ├── circles/[id]/page.tsx        # Circle detail (notes, quizzes, flashcards)
+    │   │   ├── quiz/[quizId]/solo/page.tsx  # Solo quiz practice
+    │   │   ├── quiz/[quizId]/live/page.tsx  # Live quiz room (WebSocket, WIP)
+    │   │   └── flashcards/[deckId]/page.tsx # Flashcard study view
+    │   ├── components/
+    │   │   ├── Sidebar.tsx
+    │   │   ├── BrandGlyph.tsx
+    │   │   └── MiniViz.tsx
     │   └── lib/
     │       ├── firebase.ts       # Firebase init + helpers
     │       ├── api.ts            # API client + types
-    │       └── AuthContext.tsx   # Auth provider
+    │       ├── AuthContext.tsx   # Auth provider
+    │       ├── circleStyle.ts
+    │       └── format.ts
     └── package.json
 ```
 
 ## What's next
 
-- [ ] `/circles/[id]` — circle detail page (notes, quizzes, members)
-- [ ] Notes upload UI with react-dropzone
-- [ ] Quiz generation UI
 - [ ] Conflict detection service
 - [ ] Live quiz room with WebSocket
 - [ ] Scoreboard
