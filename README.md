@@ -1,4 +1,4 @@
-# <img src="assets/circles-pig-transparent.gif" width="32" height="32" align="center" alt="Circles logo"> Circles
+# <img src="assets/circles-pig-transparent.gif" width="32" height="32" align="middle" alt="Circles logo"> Circles
 
 Study together. Quiz together.
 
@@ -20,9 +20,9 @@ This is a work-in-progress collaborative study platform where students can uploa
 
 2. Chunking - Sliding window of 400 words per chunk and 50 word overlap is used. Overlap is added to account for facts getting cut in half between chunks. May be replaced by semantic chunking in the future.
 
-3. Embedding - Uses gemini-embedding-001 with 768 dimensions. While 3072 is the default of the model, 768 saves us 4x the memory and gives us a faster search in exchange for a little accuracy.
+3. Embedding - Uses **gemini-embedding-001** with 768 dimensions. While 3072 is the default of the model, 768 saves us 4x the memory and gives us a faster search in exchange for a little accuracy.
 
-4. Storage - Chunks are stored in a vector column and Hierarchical Navigable Small World (HNSW) indexing.
+4. Storage - Chunks are stored in a vector column and **Hierarchical Navigable Small World (HNSW)** indexing.
 
 5. Retrieval - If a topic is provided during quiz generations, it compares the topic with the chunks belonging in the circle, and gets the k-most relevant chunks. Else, it gets an arbitrary first k-chunks. 
 
