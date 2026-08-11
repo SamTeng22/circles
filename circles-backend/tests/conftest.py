@@ -7,6 +7,16 @@ functions can be unit-tested without a live database or network calls.
 import pytest
 
 
+class _Transaction:
+    """No-op async context manager returned by FakeConn.transaction()."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
 class FakeConn:
     """Records every SQL statement executed against it.
 
@@ -18,12 +28,16 @@ class FakeConn:
         self.calls: list[tuple[str, tuple]] = []
         self._fetchrow_queue: list = []
         self._fetch_queue: list = []
+        self._fetchval_queue: list = []
 
     def queue_fetchrow(self, *rows):
         self._fetchrow_queue.extend(rows)
 
     def queue_fetch(self, *result_sets):
         self._fetch_queue.extend(result_sets)
+
+    def queue_fetchval(self, *values):
+        self._fetchval_queue.extend(values)
 
     async def execute(self, sql, *args):
         self.calls.append((sql, args))
@@ -42,6 +56,15 @@ class FakeConn:
     async def fetch(self, sql, *args):
         self.calls.append((sql, args))
         return self._fetch_queue.pop(0) if self._fetch_queue else []
+
+    async def fetchval(self, sql, *args):
+        self.calls.append((sql, args))
+        # Defaults to 0 (an empty circle) so tests that don't care about the
+        # small/large-circle branch get the simpler, sequential-scan path.
+        return self._fetchval_queue.pop(0) if self._fetchval_queue else 0
+
+    def transaction(self):
+        return _Transaction()
 
     # --- assertion helpers -------------------------------------------------
     def statements_matching(self, needle: str) -> list[tuple[str, tuple]]:
