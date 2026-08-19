@@ -110,6 +110,7 @@ export interface Circle {
   description: string;
   invite_code: string;
   owner_id: string;
+  storage_bytes: number;
   members?: { id: string; display_name: string; email: string }[];
   created_at: string;
 }

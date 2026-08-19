@@ -3,6 +3,8 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { BrandGlyph } from "@/components/BrandGlyph";
+import { PigLoader } from "@/components/PigLoader";
+import { PigMascot } from "@/components/PigMascot";
 
 function StepRings() {
   return (
@@ -84,11 +86,7 @@ export default function LandingPage() {
 
 
   if (loading) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
-        Loading…
-      </div>
-    );
+    return <PigLoader />;
   }
 
   return (
@@ -348,6 +346,7 @@ export default function LandingPage() {
             <div className="brand" style={{ marginBottom: "12px" }}>
               <BrandGlyph />
               <span className="brand-name">Circ<b>l</b>es</span>
+              <PigMascot size={30} />
             </div>
             <p style={{ fontSize: "13.5px", color: "var(--ink-2)", margin: 0 }}>
               Study together, verified together. Built by students, for study groups.

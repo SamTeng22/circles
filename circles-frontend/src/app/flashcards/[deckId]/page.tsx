@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { flashcardsApi, FlashcardDeck } from "@/lib/api";
+import { PigLoader } from "@/components/PigLoader";
 
 export default function StudyDeckPage() {
   const { deckId } = useParams<{ deckId: string }>();
@@ -96,11 +97,7 @@ export default function StudyDeckPage() {
   }, [next, prev]);
 
   if (loading || !user || pageLoading) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
-        Loading…
-      </div>
-    );
+    return <PigLoader />;
   }
 
   if (loadError || !deck) {
