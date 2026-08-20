@@ -17,3 +17,10 @@ export function timeAgo(iso: string): string {
   const years = Math.round(days / 365);
   return `${years} year${years === 1 ? "" : "s"} ago`;
 }
+
+/** Bytes as a compact MB string, e.g. "3.2 MB". */
+export function formatMB(bytes: number): string {
+  const mb = bytes / (1024 * 1024);
+  if (mb > 0 && mb < 0.1) return "<0.1 MB";
+  return `${mb.toFixed(1)} MB`;
+}

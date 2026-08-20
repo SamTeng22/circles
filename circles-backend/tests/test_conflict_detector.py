@@ -278,3 +278,34 @@ def test_strip_code_fence_passes_through_bare_json():
     assert cd._strip_code_fence('  {"classification":"agreement"} ') == (
         '{"classification":"agreement"}'
     )
+
+
+async def test_small_circle_forces_sequential_scan(monkeypatch, fake_conn, fake_pool):
+    # Below the threshold, sequential scan is at least as fast as HNSW and
+    # always exact (see scripts/hnsw_crossover_test.py) - force the index off.
+    monkeypatch.setattr(cd, "SMALL_CIRCLE_CHUNK_THRESHOLD", 100)
+    _patch_pool(monkeypatch, fake_pool)
+    fake_conn.queue_fetchval(5)  # circle_size, well under the threshold
+    fake_conn.queue_fetch([_chunk("chunk-a", "user-1", "text a")], [])
+    _patch_model(monkeypatch, [])
+
+    await cd.detect_conflicts_for_note("note-new", "circle-1")
+
+    assert fake_conn.ran("SET LOCAL enable_indexscan = off")
+    assert fake_conn.ran("SET LOCAL enable_bitmapscan = off")
+    assert not fake_conn.ran("hnsw.ef_search")
+
+
+async def test_large_circle_uses_widened_ef_search(monkeypatch, fake_conn, fake_pool):
+    # At or above the threshold, brute force gets expensive - fall back to
+    # the HNSW index with a widened beam instead of forcing it off.
+    monkeypatch.setattr(cd, "SMALL_CIRCLE_CHUNK_THRESHOLD", 3)
+    _patch_pool(monkeypatch, fake_pool)
+    fake_conn.queue_fetchval(1000)  # circle_size, over the threshold
+    fake_conn.queue_fetch([_chunk("chunk-a", "user-1", "text a")], [])
+    _patch_model(monkeypatch, [])
+
+    await cd.detect_conflicts_for_note("note-new", "circle-1")
+
+    assert fake_conn.ran(f"hnsw.ef_search = {cd.EF_SEARCH}")
+    assert not fake_conn.ran("enable_indexscan")

@@ -4,8 +4,9 @@ Two passes, because embedding similarity alone doesn't mean disagreement — two
 chunks that are near-duplicates in vector space are usually two people saying
 the *same* thing about a topic:
 
-1. Cheap: pgvector ANN search pulls each new chunk's nearest neighbours that
-   were written by somebody else in the circle.
+1. Cheap: a nearest-neighbour search pulls each new chunk's closest matches
+   written by somebody else in the circle - an exact sequential scan below
+   SMALL_CIRCLE_CHUNK_THRESHOLD chunks, pgvector's HNSW index above it.
 2. Expensive: Gemini classifies each surviving pair as agreement /
    contradiction / unrelated, and only contradictions are persisted.
 
@@ -26,6 +27,21 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 SIMILARITY_THRESHOLD = 0.25
 # Nearest neighbours to pull per new chunk before threshold filtering.
 NEIGHBORS_PER_CHUNK = 5
+# HNSW beam width for the neighbour search below, widened well past pgvector's
+# default (40). WHERE circle_id = $1 is applied *after* the ANN search picks
+# its ef_search candidates, so a narrow beam drawn from the whole note_chunks
+# table can be dominated by other circles, starving a small circle of results
+# it should have matched. This runs off the request path (background task),
+# so the extra query cost is an acceptable trade for recall.
+EF_SEARCH = 200
+# Below this many chunks in a circle, force a plain sequential scan instead of
+# the HNSW index: scripts/hnsw_crossover_test.py measured sequential scan at
+# least as fast as HNSW up to ~1,660 chunks (the max a circle can hold under
+# CIRCLE_STORAGE_QUOTA_BYTES today) and only saw HNSW pull ahead at 5,000.
+# Sequential is also exact, so this sidesteps ANN recall risk entirely for
+# every circle size the app can currently produce. Set with headroom above
+# that quota-implied ceiling; only matters once the beta quota is raised.
+SMALL_CIRCLE_CHUNK_THRESHOLD = 2000
 # Hard ceiling on Gemini calls per note so a large upload into a large circle
 # can't run up an unbounded bill.
 MAX_PAIRS_PER_NOTE = 40
@@ -100,30 +116,42 @@ async def detect_conflicts_for_note(note_id: str, circle_id: str) -> int:
         if not new_chunks:
             return 0
 
+        circle_size = await conn.fetchval(
+            "SELECT count(*) FROM note_chunks WHERE circle_id = $1", circle_id
+        )
+
         # Gather candidates first so all the ANN queries share one connection.
         candidates = []
-        for chunk in new_chunks:
-            neighbors = await conn.fetch(
-                """
-                SELECT id, note_id, user_id, content,
-                       embedding <-> $2::vector AS distance
-                FROM note_chunks
-                WHERE circle_id = $1
-                  AND note_id != $3
-                  AND user_id != $4
-                ORDER BY embedding <-> $2::vector
-                LIMIT $5
-                """,
-                circle_id, chunk["embedding"], note_id, chunk["user_id"],
-                NEIGHBORS_PER_CHUNK,
-            )
-            for other in neighbors:
-                # Embeddings are L2-normalized (see services/embedding.py), so
-                # l2^2 == 2 * cosine_distance. We order by `<->` to hit the
-                # hnsw vector_l2_ops index, then convert for the threshold.
-                cosine_distance = (other["distance"] ** 2) / 2
-                if cosine_distance <= SIMILARITY_THRESHOLD:
-                    candidates.append((chunk, other))
+        async with conn.transaction():
+            # SET LOCAL is scoped to this transaction, so it can't leak onto
+            # unrelated queries that reuse this pooled connection afterward.
+            if circle_size < SMALL_CIRCLE_CHUNK_THRESHOLD:
+                await conn.execute("SET LOCAL enable_indexscan = off")
+                await conn.execute("SET LOCAL enable_bitmapscan = off")
+            else:
+                await conn.execute(f"SET LOCAL hnsw.ef_search = {EF_SEARCH}")
+            for chunk in new_chunks:
+                neighbors = await conn.fetch(
+                    """
+                    SELECT id, note_id, user_id, content,
+                           embedding <-> $2::vector AS distance
+                    FROM note_chunks
+                    WHERE circle_id = $1
+                      AND note_id != $3
+                      AND user_id != $4
+                    ORDER BY embedding <-> $2::vector
+                    LIMIT $5
+                    """,
+                    circle_id, chunk["embedding"], note_id, chunk["user_id"],
+                    NEIGHBORS_PER_CHUNK,
+                )
+                for other in neighbors:
+                    # Embeddings are L2-normalized (see services/embedding.py), so
+                    # l2^2 == 2 * cosine_distance. We order by `<->` to hit the
+                    # hnsw vector_l2_ops index, then convert for the threshold.
+                    cosine_distance = (other["distance"] ** 2) / 2
+                    if cosine_distance <= SIMILARITY_THRESHOLD:
+                        candidates.append((chunk, other))
 
     candidates.sort(key=lambda pair: pair[1]["distance"])
     candidates = candidates[:MAX_PAIRS_PER_NOTE]

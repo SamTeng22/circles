@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { quizApi, Quiz } from "@/lib/api";
+import { PigLoader } from "@/components/PigLoader";
 
 export default function SoloQuizPage() {
   const { quizId } = useParams<{ quizId: string }>();
@@ -80,11 +81,7 @@ export default function SoloQuizPage() {
   }
 
   if (loading || !user || pageLoading) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
-        Loading…
-      </div>
-    );
+    return <PigLoader />;
   }
 
   if (loadError || !quiz) {
