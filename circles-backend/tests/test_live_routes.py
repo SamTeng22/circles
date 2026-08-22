@@ -183,6 +183,79 @@ def test_disconnect_mid_game_reflected_without_crashing_other_clients():
         assert answer_msg["user_id"] == "user-1"
 
 
+# --- multilingual quizzes: host-picked session language ---------------------
+
+def test_start_quiz_broadcasts_host_picked_language():
+    client = _client()
+    quiz_id = _quiz_id()
+
+    with _ws(client, quiz_id, "user-1") as host, _ws(client, quiz_id, "user-2") as guest:
+        host.receive_json()
+        host.receive_json()
+        guest.receive_json()
+
+        host.send_json({"type": "start_quiz", "language": "tl"})
+        question_for_host = host.receive_json()
+        question_for_guest = guest.receive_json()
+
+        for msg in (question_for_host, question_for_guest):
+            assert msg["type"] == "question_start"
+            assert msg["language"] == "tl"
+
+
+def test_start_quiz_defaults_language_to_en_when_omitted():
+    client = _client()
+    quiz_id = _quiz_id()
+
+    with _ws(client, quiz_id, "user-1") as host:
+        host.receive_json()
+
+        host.send_json({"type": "start_quiz"})
+        msg = host.receive_json()
+
+        assert msg["language"] == "en"
+
+
+def test_late_joiner_learns_room_language_from_user_joined():
+    client = _client()
+    quiz_id = _quiz_id()
+
+    with _ws(client, quiz_id, "user-1") as host:
+        host.receive_json()
+
+        host.send_json({"type": "start_quiz", "language": "zh"})
+        host.receive_json()  # question_start
+
+        with _ws(client, quiz_id, "user-2") as guest:
+            join_seen_by_guest = guest.receive_json()
+            host.receive_json()  # same broadcast, seen by host too
+
+            assert join_seen_by_guest["type"] == "user_joined"
+            assert join_seen_by_guest["language"] == "zh"
+
+
+def test_advance_question_carries_the_locked_in_language(monkeypatch):
+    async def _instant_sleep(seconds):
+        return None
+    monkeypatch.setattr(live.asyncio, "sleep", _instant_sleep)
+
+    client = _client()
+    quiz_id = _quiz_id()
+
+    with _ws(client, quiz_id, "user-1") as host:
+        host.receive_json()
+
+        host.send_json({"type": "start_quiz", "language": "tl"})
+        host.receive_json()  # question_start index 0
+
+        host.send_json({"type": "question_end"})
+        host.receive_json()  # rest_phase
+
+        advanced = host.receive_json()  # auto-advance
+        assert advanced["type"] == "question_start"
+        assert advanced["language"] == "tl"
+
+
 # --- final leaderboard -------------------------------------------------------
 
 def test_leaderboard_at_final_question_reflects_correct_cumulative_scores():

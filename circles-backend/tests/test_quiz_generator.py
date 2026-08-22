@@ -50,7 +50,36 @@ async def test_parses_plain_json(monkeypatch):
         "correct_answer": "A. x",
         "bloom_level": "remembering",
         "explanation": "e",
+        "language": "en",
     }]
+
+
+async def test_keeps_valid_language_code(monkeypatch):
+    raw = (
+        '[{"question": "Ano ito?", "options": ["A", "B"], "correct_answer": "A", '
+        '"bloom_level": "remembering", "explanation": "", "language": "tl"}]'
+    )
+    _patch(monkeypatch, raw=raw)
+
+    questions = await qg.generate_quiz_questions(
+        [{"filename": "notes.txt", "content": "tagalog notes"}], 1
+    )
+
+    assert questions[0]["language"] == "tl"
+
+
+async def test_clamps_unrecognized_language_code(monkeypatch):
+    raw = (
+        '[{"question": "Q", "options": ["A", "B"], "correct_answer": "A", '
+        '"bloom_level": "remembering", "explanation": "", "language": "french"}]'
+    )
+    _patch(monkeypatch, raw=raw)
+
+    questions = await qg.generate_quiz_questions(
+        [{"filename": "notes.txt", "content": "notes"}], 1
+    )
+
+    assert questions[0]["language"] == "en"
 
 
 async def test_strips_markdown_code_fence(monkeypatch):

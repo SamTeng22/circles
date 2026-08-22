@@ -31,12 +31,19 @@ async def generate_flashcards(
 
 Each flashcard has a short prompt on the front and a concise, self-contained answer on the back. Favor one idea per card: key terms, definitions, cause/effect, and important facts. Keep fronts under ~15 words and backs under ~40 words.
 
+Language rules:
+- Each note below is written in one of: English, Tagalog, or Chinese.
+- Write each flashcard (front, back, hint) in the SAME language as the note it is drawn from.
+- Tag every flashcard with a "language" field using EXACTLY one of these codes: "en" (English), "tl" (Tagalog/Filipino), "zh" (Chinese). Do not use any other code or a language name.
+- It is fine and expected for different flashcards in the same output to use different languages if the source notes differ in language.
+
 Return ONLY a valid JSON array with this exact format, no markdown, no extra text:
 [
   {{
     "front": "...",
     "back": "...",
-    "hint": "..."
+    "hint": "...",
+    "language": "en|tl|zh"
   }}
 ]
 
@@ -46,4 +53,8 @@ Study notes:
 {context}
 """
     response = model.generate_content(prompt)
-    return json.loads(_strip_code_fence(response.text))
+    cards = json.loads(_strip_code_fence(response.text))
+    for c in cards:
+        if c.get("language") not in ("en", "tl", "zh"):
+            c["language"] = "en"
+    return cards
