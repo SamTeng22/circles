@@ -3,7 +3,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
-from app.api.routes import auth, circles, notes, quiz, live, flashcards
+from app.api.routes import auth, circles, notes, quiz, live, flashcards, conflicts
 from app.core.config import settings
 from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from app.db.database import get_pool, init_db
@@ -50,6 +50,7 @@ app.include_router(notes.router, prefix="/api/notes", tags=["notes"])
 app.include_router(quiz.router, prefix="/api/quiz", tags=["quiz"])
 app.include_router(flashcards.router, prefix="/api/flashcards", tags=["flashcards"])
 app.include_router(live.router, prefix="/api/live", tags=["live"])
+app.include_router(conflicts.router, prefix="/api/conflicts", tags=["conflicts"])
 
 @app.get("/")
 def root():
