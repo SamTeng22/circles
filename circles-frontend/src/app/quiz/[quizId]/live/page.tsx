@@ -1,8 +1,14 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
-import { quizApi, Quiz } from "@/lib/api";
+import { quizApi, Quiz, Question, getQuestionLanguage } from "@/lib/api";
+
+const LANGUAGE_LABELS: Record<string, string> = {
+  en: "English",
+  tl: "Filipino",
+  zh: "Chinese",
+};
 
 type Phase = "lobby" | "question" | "rest" | "finished";
 
@@ -27,6 +33,7 @@ export default function LiveQuizPage() {
   const [countdown, setCountdown] = useState(15);
   const [hostId, setHostId] = useState<string | null>(null);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [language, setLanguage] = useState<string | null>(null);
 
   const ws = useRef<WebSocket | null>(null);
   const countdownRef = useRef<NodeJS.Timeout | null>(null);
@@ -34,8 +41,33 @@ export default function LiveQuizPage() {
 
   const userId = user?.uid ?? "";
   const isHost = userId === hostId;
-  const currentQuestion = quiz?.questions?.[questionIndex];
-  const totalQuestions = quiz?.questions?.length ?? 0;
+
+  const distinctLanguages = useMemo(
+    () => Array.from(new Set((quiz?.questions ?? []).map(getQuestionLanguage))),
+    [quiz]
+  );
+
+  const filteredQuestions: Question[] = useMemo(() => {
+    if (!quiz) return [];
+    const target = language ?? getQuestionLanguage(quiz.questions[0]);
+    return quiz.questions.filter((q) => getQuestionLanguage(q) === target);
+  }, [quiz, language]);
+
+  const currentQuestion = filteredQuestions[questionIndex];
+  const totalQuestions = filteredQuestions.length;
+
+  // Always-current refs so the WebSocket handler (wired up once, see below)
+  // never reasons from a stale closure over quiz/language.
+  const quizRef = useRef<Quiz | null>(null);
+  useEffect(() => {
+    quizRef.current = quiz;
+  }, [quiz]);
+
+  function countForLanguage(q: Quiz | null, lang: string | null): number {
+    if (!q || q.questions.length === 0) return 0;
+    const target = lang ?? getQuestionLanguage(q.questions[0]);
+    return q.questions.filter((question) => getQuestionLanguage(question) === target).length;
+  }
 
   // Load quiz data
   useEffect(() => {
@@ -81,10 +113,13 @@ export default function LiveQuizPage() {
         setParticipants(msg.participants ?? []);
         setHostId(msg.host_id ?? null);
         if (msg.phase) setPhase(msg.phase);
+        if (msg.language) setLanguage(msg.language);
         break;
 
       case "question_start": {
-        const isFinished = msg.question_index >= totalQuestions;
+        if (msg.language) setLanguage(msg.language);
+        const total = countForLanguage(quizRef.current, msg.language ?? null);
+        const isFinished = msg.question_index >= total;
         setPhase(isFinished ? "finished" : "question");
         setQuestionIndex(msg.question_index);
         setSelectedAnswer(null);
@@ -164,8 +199,9 @@ export default function LiveQuizPage() {
     send({ type: "question_end" });
   }
 
-  function startQuiz() {
-    send({ type: "start_quiz" });
+  function startQuiz(pickedLanguage?: string) {
+    const lang = pickedLanguage ?? distinctLanguages[0] ?? "en";
+    send({ type: "start_quiz", language: lang });
   }
 
   const isReady = readyIds.includes(userId);
@@ -189,9 +225,29 @@ export default function LiveQuizPage() {
             ))}
           </div>
         </div>
-        {isHost && (
+        {isHost && distinctLanguages.length > 1 && (
+          <div className="flex flex-col items-center gap-2">
+            <p className="text-sm text-gray-500">This quiz has multiple languages — play with:</p>
+            <div className="flex gap-2">
+              {distinctLanguages.map((code) => {
+                const count = countForLanguage(quiz, code);
+                return (
+                  <button
+                    key={code}
+                    onClick={() => startQuiz(code)}
+                    disabled={participants.length < 1}
+                    className="px-5 py-3 bg-black text-white rounded-xl font-medium hover:bg-gray-800 disabled:opacity-40"
+                  >
+                    {LANGUAGE_LABELS[code] ?? code} ({count})
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {isHost && distinctLanguages.length <= 1 && (
           <button
-            onClick={startQuiz}
+            onClick={() => startQuiz()}
             disabled={participants.length < 1}
             className="px-6 py-3 bg-black text-white rounded-xl font-medium hover:bg-gray-800 disabled:opacity-40"
           >

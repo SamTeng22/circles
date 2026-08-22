@@ -39,7 +39,18 @@ async def test_parses_plain_json(monkeypatch):
         [{"filename": "notes.txt", "content": "some note text"}], 5
     )
 
-    assert cards == [{"front": "What is X?", "back": "X is Y", "hint": ""}]
+    assert cards == [{"front": "What is X?", "back": "X is Y", "hint": "", "language": "en"}]
+
+
+async def test_clamps_unrecognized_language_code(monkeypatch):
+    raw = '[{"front": "Q", "back": "A", "hint": "", "language": "french"}]'
+    _patch(monkeypatch, raw=raw)
+
+    cards = await fg.generate_flashcards(
+        [{"filename": "notes.txt", "content": "notes"}], 1
+    )
+
+    assert cards[0]["language"] == "en"
 
 
 async def test_strips_markdown_code_fence(monkeypatch):

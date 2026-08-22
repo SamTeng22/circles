@@ -16,6 +16,7 @@ class RoomState:
         self.current_question: int = 0
         self.host_id: str = None
         self.next_question_task: asyncio.Task = None
+        self.language: str | None = None                 # locked in by host on start_quiz
 
 rooms: Dict[str, RoomState] = {}
 
@@ -43,6 +44,7 @@ async def live_quiz_ws(websocket: WebSocket, quiz_id: str, user_id: str):
         "scores": room.scores,
         "phase": room.phase,
         "host_id": room.host_id,
+        "language": room.language,
     })
 
     try:
@@ -66,11 +68,13 @@ async def live_quiz_ws(websocket: WebSocket, quiz_id: str, user_id: str):
             elif mtype == "start_quiz" and user_id == room.host_id:
                 room.phase = "question"
                 room.current_question = 0
+                room.language = message.get("language") or "en"
                 room.ready.clear()
                 await broadcast(quiz_id, {
                     "type": "question_start",
                     "question_index": room.current_question,
                     "phase": "question",
+                    "language": room.language,
                 })
 
             # --- Player submits answer ---
@@ -163,6 +167,7 @@ async def _advance_question(quiz_id: str, room: RoomState):
         "type": "question_start",
         "question_index": room.current_question,
         "phase": "question",
+        "language": room.language,
         "leaderboard": _leaderboard(room),
     })
 

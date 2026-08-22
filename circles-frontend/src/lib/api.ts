@@ -157,6 +157,11 @@ export interface Question {
   correct_answer: string;
   bloom_level: string;
   explanation: string;
+  language?: string;
+}
+
+export function getQuestionLanguage(q: Question): string {
+  return q.language ?? "en";
 }
 
 export interface Conflict {
@@ -181,6 +186,7 @@ export interface Flashcard {
   front: string;
   back: string;
   hint?: string;
+  language?: string;
 }
 
 export interface FlashcardDeck {
