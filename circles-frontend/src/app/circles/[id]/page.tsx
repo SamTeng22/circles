@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
-import { circlesApi, notesApi, quizApi, flashcardsApi, Circle, Note, Quiz, FlashcardDeck, GENERATION_CONTEXT_CHAR_LIMIT } from "@/lib/api";
+import { circlesApi, notesApi, quizApi, flashcardsApi, conflictsApi, Circle, Note, Quiz, FlashcardDeck, Conflict, GENERATION_CONTEXT_CHAR_LIMIT } from "@/lib/api";
 import { Sidebar } from "@/components/Sidebar";
 import { PigLoader } from "@/components/PigLoader";
 import { PigProcessing } from "@/components/PigProcessing";
@@ -11,14 +11,47 @@ import { timeAgo, formatMB } from "@/lib/format";
 
 type Tab = "consensus" | "notes" | "quizzes" | "flashcards";
 
-// Fixed cluster positions for the decorative consensus lens (overlapping blobs).
-const LENS_POS = [
-  { x: 38, y: 34, r: 130 },
-  { x: 62, y: 36, r: 132 },
-  { x: 50, y: 60, r: 128 },
-  { x: 36, y: 58, r: 116 },
-  { x: 64, y: 58, r: 116 },
-];
+// Cluster positions for the consensus lens (overlapping blobs), one per member.
+// Members are spread evenly around the center; a member's distance from center
+// grows with how many conflicts they're involved in, on a fixed absolute scale
+// (not relative to the most-conflicted member shown) so a single conflict only
+// nudges two members apart instead of maxing out the separation whenever
+// everyone happens to share the same conflict count. Blobs sit close together
+// (heavy overlap) when there's little or no conflict. There's no signal yet
+// for "unrelated" notes (only contradictions are persisted), so an unrelated
+// pair currently looks the same as full agreement.
+const LENS_BASE_DIST = 12; // % distance from center with zero conflicts
+const LENS_MAX_PUSH = 20; // extra % distance at LENS_CONFLICT_CAP conflicts
+const LENS_CONFLICT_CAP = 5; // conflict count at which a member is fully pushed out
+const LENS_BLOB_SIZE = 128; // px
+
+type LensPos = { x: number; y: number; r: number };
+
+function computeLensLayout(memberIds: string[], conflicts: Conflict[]): LensPos[] {
+  const n = memberIds.length;
+  if (n === 0) return [];
+
+  const conflictCounts = new Map<string, number>();
+  for (const c of conflicts) {
+    conflictCounts.set(c.user_a_id, (conflictCounts.get(c.user_a_id) ?? 0) + 1);
+    conflictCounts.set(c.user_b_id, (conflictCounts.get(c.user_b_id) ?? 0) + 1);
+  }
+
+  return memberIds.map((id, i) => {
+    if (n === 1) return { x: 50, y: 46, r: LENS_BLOB_SIZE };
+    const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+    // Squared so a lone conflict barely registers but repeated conflicts still
+    // escalate to full separation by LENS_CONFLICT_CAP.
+    const linear = Math.min((conflictCounts.get(id) ?? 0) / LENS_CONFLICT_CAP, 1);
+    const score = linear * linear;
+    const dist = LENS_BASE_DIST + score * LENS_MAX_PUSH;
+    return {
+      x: 50 + dist * Math.cos(angle),
+      y: 46 + dist * Math.sin(angle),
+      r: LENS_BLOB_SIZE,
+    };
+  });
+}
 
 export default function CircleDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -30,6 +63,7 @@ export default function CircleDetailPage() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [decks, setDecks] = useState<FlashcardDeck[]>([]);
+  const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [tab, setTab] = useState<Tab>("notes");
@@ -87,14 +121,16 @@ export default function CircleDetailPage() {
       quizApi.list(id),
       flashcardsApi.list(id),
       circlesApi.list(),
+      conflictsApi.list(id),
     ])
-      .then(([c, n, q, d, all]) => {
+      .then(([c, n, q, d, all, conf]) => {
         if (cancelled) return;
         setCircle(c);
         setNotes(n);
         setQuizzes(q);
         setDecks(d);
         setAllCircles(all);
+        setConflicts(conf);
       })
       .catch((e: any) => {
         if (!cancelled) setLoadError(e.message || "Failed to load this circle.");
@@ -117,6 +153,23 @@ export default function CircleDetailPage() {
   }, [notes, id]);
 
   const members = circle?.members ?? [];
+
+  // Rough consensus score: share of notes that aren't on either side of a
+  // recorded conflict. Not a true "agreement" measure (a note can be
+  // conflict-free just because nothing overlapping was ever compared to it),
+  // but it's the only signal the backend currently persists.
+  const conflictedNoteIds = useMemo(() => {
+    const ids = new Set<string>();
+    conflicts.forEach((c) => {
+      ids.add(c.note_a_id);
+      ids.add(c.note_b_id);
+    });
+    return ids;
+  }, [conflicts]);
+  const consensusPct =
+    notes.length > 0
+      ? Math.round(((notes.length - conflictedNoteIds.size) / notes.length) * 100)
+      : null;
 
   // Resolve the current user's DB id (members carry it, Firebase only gives email).
   const myId = useMemo(
@@ -442,26 +495,30 @@ export default function CircleDetailPage() {
           </button>
         </div>
 
-        {/* Consensus (placeholder) */}
+        {/* Consensus */}
         {tab === "consensus" && (
           <div className="consensus">
             <div>
               <div className="lens-wrap">
                 <div className="lens">
-                  {members.slice(0, 5).map((m, i) => {
-                    const pos = LENS_POS[i];
-                    return (
-                      <div
-                        key={m.id}
-                        className="blob"
-                        style={{ width: pos.r, height: pos.r, background: circleColor(m.id), left: `${pos.x}%`, top: `${pos.y}%` }}
-                      />
-                    );
-                  })}
+                  {(() => {
+                    const lensMembers = members.slice(0, 5);
+                    const lensLayout = computeLensLayout(lensMembers.map((m) => m.id), conflicts);
+                    return lensMembers.map((m, i) => {
+                      const pos = lensLayout[i];
+                      return (
+                        <div
+                          key={m.id}
+                          className="blob"
+                          style={{ width: pos.r, height: pos.r, background: circleColor(m.id), left: `${pos.x}%`, top: `${pos.y}%` }}
+                        />
+                      );
+                    });
+                  })()}
                   <div className="lens-core">
                     <div>
-                      <b>—</b>
-                      <span>not computed</span>
+                      <b>{consensusPct === null ? "—" : `${consensusPct}%`}</b>
+                      <span>{consensusPct === null ? "no notes yet" : "consensus"}</span>
                     </div>
                   </div>
                 </div>
@@ -478,19 +535,36 @@ export default function CircleDetailPage() {
                 dense centre would become your verified set.
               </p>
             </div>
-            <div className="panel">
-              <div className="panel-h">
-                <h3>Disagreements &amp; gaps</h3>
-                <span className="chip chip-line">soon</span>
+            {conflicts.length === 0 ? (
+              <div className="panel">
+                <div className="panel-h">
+                  <h3>Disagreements &amp; gaps</h3>
+                  <span className="chip chip-jade">clear</span>
+                </div>
+                <div className="panel-b">
+                  <p>No disagreements found across the notes in this circle yet.</p>
+                </div>
               </div>
-              <div className="panel-b">
-                <p>
-                  The consensus engine isn&apos;t available yet. Once uploaded notes are compared,
-                  this is where agreements, conflicts (with the majority answer kept), and gaps
-                  nobody covered will appear.
-                </p>
-              </div>
-            </div>
+            ) : (
+              conflicts.map((c) => (
+                <div className="panel" key={c.id}>
+                  <div className="panel-h">
+                    <h3>
+                      {c.note_a_filename} vs {c.note_b_filename}
+                    </h3>
+                    <span className={`chip ${c.resolved ? "chip-jade" : "chip-flag"}`}>
+                      {c.resolved ? "resolved" : "unresolved"}
+                    </span>
+                  </div>
+                  <div className="panel-b">
+                    <p>{c.explanation}</p>
+                    <p className="sub" style={{ fontSize: 12, marginTop: 8 }}>
+                      {c.user_a_name} vs {c.user_b_name} · {timeAgo(c.created_at)}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         )}
 

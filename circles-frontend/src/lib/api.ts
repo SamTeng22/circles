@@ -96,6 +96,10 @@ export const quizApi = {
     api.post<{ score: number; total: number }>(`/api/quiz/${quizId}/submit`, answers),
 };
 
+export const conflictsApi = {
+  list: (circleId: string) => api.get<Conflict[]>(`/api/conflicts/${circleId}`),
+};
+
 export const flashcardsApi = {
   list: (circleId: string) => api.get<FlashcardDeck[]>(`/api/flashcards/${circleId}`),
   getById: (deckId: string) => api.get<FlashcardDeck>(`/api/flashcards/detail/${deckId}`),
@@ -152,6 +156,24 @@ export interface Question {
   correct_answer: string;
   bloom_level: string;
   explanation: string;
+}
+
+export interface Conflict {
+  id: string;
+  circle_id: string;
+  chunk_a_id: string;
+  chunk_b_id: string;
+  note_a_id: string;
+  note_b_id: string;
+  user_a_id: string;
+  user_b_id: string;
+  explanation: string;
+  resolved: boolean;
+  created_at: string;
+  note_a_filename: string;
+  note_b_filename: string;
+  user_a_name: string;
+  user_b_name: string;
 }
 
 export interface Flashcard {
