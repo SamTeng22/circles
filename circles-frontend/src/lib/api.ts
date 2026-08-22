@@ -82,15 +82,24 @@ export const notesApi = {
 // — keep the two in sync manually.
 export const GENERATION_CONTEXT_CHAR_LIMIT = 40_000;
 
+export type Difficulty = "easy" | "medium" | "hard";
+
 export const quizApi = {
   list: (circleId: string) => api.get<Quiz[]>(`/api/quiz/${circleId}`),
   getById: (quizId: string) => api.get<Quiz>(`/api/quiz/detail/${quizId}`),
-  generate: (circleId: string, title: string, noteIds: string[], num?: number) =>
+  generate: (
+    circleId: string,
+    title: string,
+    noteIds: string[],
+    num?: number,
+    difficulty?: Difficulty
+  ) =>
     api.post<Quiz>("/api/quiz/generate", {
       circle_id: circleId,
       title,
       note_ids: noteIds,
       num_questions: num ?? 5,
+      difficulty: difficulty ?? "medium",
     }),
   submit: (quizId: string, answers: Record<string, string>) =>
     api.post<{ score: number; total: number }>(`/api/quiz/${quizId}/submit`, answers),
@@ -103,12 +112,19 @@ export const conflictsApi = {
 export const flashcardsApi = {
   list: (circleId: string) => api.get<FlashcardDeck[]>(`/api/flashcards/${circleId}`),
   getById: (deckId: string) => api.get<FlashcardDeck>(`/api/flashcards/detail/${deckId}`),
-  generate: (circleId: string, title: string, noteIds: string[], num?: number) =>
+  generate: (
+    circleId: string,
+    title: string,
+    noteIds: string[],
+    num?: number,
+    difficulty?: Difficulty
+  ) =>
     api.post<FlashcardDeck>("/api/flashcards/generate", {
       circle_id: circleId,
       title,
       note_ids: noteIds,
       num_cards: num ?? 10,
+      difficulty: difficulty ?? "medium",
     }),
 };
 

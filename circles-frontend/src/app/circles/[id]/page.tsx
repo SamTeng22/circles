@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
-import { circlesApi, notesApi, quizApi, flashcardsApi, conflictsApi, Circle, Note, Quiz, FlashcardDeck, Conflict, GENERATION_CONTEXT_CHAR_LIMIT } from "@/lib/api";
+import { circlesApi, notesApi, quizApi, flashcardsApi, conflictsApi, Circle, Note, Quiz, FlashcardDeck, Conflict, Difficulty, GENERATION_CONTEXT_CHAR_LIMIT } from "@/lib/api";
 import { Sidebar } from "@/components/Sidebar";
 import { PigLoader } from "@/components/PigLoader";
 import { PigProcessing } from "@/components/PigProcessing";
@@ -80,6 +80,7 @@ export default function CircleDetailPage() {
   const [genTitle, setGenTitle] = useState("");
   const [genSelectedNoteIds, setGenSelectedNoteIds] = useState<string[]>([]);
   const [genNum, setGenNum] = useState(5);
+  const [genDifficulty, setGenDifficulty] = useState<Difficulty>("medium");
   const [genBusy, setGenBusy] = useState(false);
   const [genError, setGenError] = useState("");
 
@@ -321,6 +322,7 @@ export default function CircleDetailPage() {
     setGenTitle("");
     setGenSelectedNoteIds([]);
     setGenNum(mode === "quiz" ? 5 : 10);
+    setGenDifficulty("medium");
     setGenError("");
     setShowGen(true);
   }
@@ -350,10 +352,10 @@ export default function CircleDetailPage() {
     setGenError("");
     try {
       if (genMode === "quiz") {
-        const quiz = await quizApi.generate(id, genTitle.trim(), genSelectedNoteIds, genNum);
+        const quiz = await quizApi.generate(id, genTitle.trim(), genSelectedNoteIds, genNum, genDifficulty);
         setQuizzes([quiz, ...quizzes]);
       } else {
-        const deck = await flashcardsApi.generate(id, genTitle.trim(), genSelectedNoteIds, genNum);
+        const deck = await flashcardsApi.generate(id, genTitle.trim(), genSelectedNoteIds, genNum, genDifficulty);
         setDecks([deck, ...decks]);
       }
       setShowGen(false);
@@ -849,6 +851,22 @@ export default function CircleDetailPage() {
               <p className="sub" style={{ fontSize: 12, margin: "6px 0 0" }}>
                 {genMode === "quiz" ? "Number of questions (1–20)" : "Number of cards (1–30)"}
               </p>
+            </div>
+            <div className="field">
+              <label>Difficulty</label>
+              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                {(["easy", "medium", "hard"] as Difficulty[]).map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    className={`btn btn-sm ${genDifficulty === d ? "btn-primary" : "btn-ghost"}`}
+                    style={{ flex: 1, textTransform: "capitalize" }}
+                    onClick={() => setGenDifficulty(d)}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="modal-actions">
               <button className="btn btn-ghost btn-sm" onClick={() => setShowGen(false)} disabled={genBusy}>

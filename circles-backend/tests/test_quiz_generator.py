@@ -21,6 +21,16 @@ def _patch(monkeypatch, *, raw):
     monkeypatch.setattr(qg, "model", FakeModel())
 
 
+def _patch_capturing_prompt(monkeypatch, *, raw):
+    captured = {}
+    class FakeModel:
+        def generate_content(self, prompt):
+            captured["prompt"] = prompt
+            return FakeResponse(raw)
+    monkeypatch.setattr(qg, "model", FakeModel())
+    return captured
+
+
 # --- generate_quiz_questions -------------------------------------------------
 
 async def test_returns_empty_when_no_notes(monkeypatch):
@@ -111,6 +121,40 @@ async def test_strips_markdown_code_fence(monkeypatch):
 
     assert questions[0]["question"] == "Q"
     assert questions[0]["correct_answer"] == "A"
+
+
+# --- difficulty ---------------------------------------------------------------
+
+async def test_defaults_to_medium_difficulty(monkeypatch):
+    raw = '[{"question": "Q", "options": ["A", "B"], "correct_answer": "A", "bloom_level": "remembering", "explanation": ""}]'
+    captured = _patch_capturing_prompt(monkeypatch, raw=raw)
+
+    await qg.generate_quiz_questions([{"filename": "n.txt", "content": "c"}], 1)
+
+    assert "Difficulty: MEDIUM" in captured["prompt"]
+
+
+@pytest.mark.parametrize("difficulty,label", [("easy", "EASY"), ("hard", "HARD")])
+async def test_passes_difficulty_into_prompt(monkeypatch, difficulty, label):
+    raw = '[{"question": "Q", "options": ["A", "B"], "correct_answer": "A", "bloom_level": "remembering", "explanation": ""}]'
+    captured = _patch_capturing_prompt(monkeypatch, raw=raw)
+
+    await qg.generate_quiz_questions(
+        [{"filename": "n.txt", "content": "c"}], 1, difficulty=difficulty
+    )
+
+    assert f"Difficulty: {label}" in captured["prompt"]
+
+
+async def test_unrecognized_difficulty_falls_back_to_medium(monkeypatch):
+    raw = '[{"question": "Q", "options": ["A", "B"], "correct_answer": "A", "bloom_level": "remembering", "explanation": ""}]'
+    captured = _patch_capturing_prompt(monkeypatch, raw=raw)
+
+    await qg.generate_quiz_questions(
+        [{"filename": "n.txt", "content": "c"}], 1, difficulty="extreme"
+    )
+
+    assert "Difficulty: MEDIUM" in captured["prompt"]
 
 
 # --- build_context -----------------------------------------------------------
