@@ -170,7 +170,7 @@ export default function DashboardPage() {
         ) : (
           <div className="grid">
             {filtered.map((c) => {
-              const memberCount = c.members?.length ?? 1;
+              const memberCount = c.member_count ?? c.members?.length ?? 1;
               return (
                 <div key={c.id} className="card ccard" onClick={() => router.push(`/circles/${c.id}`)}>
                   <div className="ccard-top">

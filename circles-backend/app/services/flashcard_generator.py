@@ -1,9 +1,9 @@
 import json
 import google.generativeai as genai
 from app.core.config import settings
-# Reuse the same retrieval-over-note-chunks logic the quiz generator uses so
-# flashcards are grounded in the circle's pooled notes.
-from app.services.quiz_generator import retrieve_chunks
+# Reuse the same context-building helper the quiz generator uses so flashcards
+# are grounded in the same selected notes format.
+from app.services.quiz_generator import build_context
 
 genai.configure(api_key=settings.GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
@@ -20,15 +20,13 @@ def _strip_code_fence(text: str) -> str:
 
 
 async def generate_flashcards(
-    circle_id: str,
-    topic: str,
+    notes: list[dict],
     num_cards: int,
 ) -> list[dict]:
-    chunks = await retrieve_chunks(circle_id, topic)
-    if not chunks:
+    if not notes:
         return []
 
-    context = "\n\n".join(chunks)
+    context = build_context(notes)
     prompt = f"""You are a flashcard generator for students. Based on the study notes below, generate {num_cards} flashcards.
 
 Each flashcard has a short prompt on the front and a concise, self-contained answer on the back. Favor one idea per card: key terms, definitions, cause/effect, and important facts. Keep fronts under ~15 words and backs under ~40 words.

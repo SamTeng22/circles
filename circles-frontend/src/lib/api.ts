@@ -77,14 +77,19 @@ export const notesApi = {
     api.del<{ deleted: string }>(`/api/notes/${circleId}/${noteId}`),
 };
 
+// Total character budget for combined selected-note content per generation
+// call. Mirrors GENERATION_CONTEXT_CHAR_LIMIT in circles-backend/app/core/config.py
+// — keep the two in sync manually.
+export const GENERATION_CONTEXT_CHAR_LIMIT = 40_000;
+
 export const quizApi = {
   list: (circleId: string) => api.get<Quiz[]>(`/api/quiz/${circleId}`),
   getById: (quizId: string) => api.get<Quiz>(`/api/quiz/detail/${quizId}`),
-  generate: (circleId: string, title: string, topic?: string, num?: number) =>
+  generate: (circleId: string, title: string, noteIds: string[], num?: number) =>
     api.post<Quiz>("/api/quiz/generate", {
       circle_id: circleId,
       title,
-      topic: topic ?? "",
+      note_ids: noteIds,
       num_questions: num ?? 5,
     }),
   submit: (quizId: string, answers: Record<string, string>) =>
@@ -98,11 +103,11 @@ export const conflictsApi = {
 export const flashcardsApi = {
   list: (circleId: string) => api.get<FlashcardDeck[]>(`/api/flashcards/${circleId}`),
   getById: (deckId: string) => api.get<FlashcardDeck>(`/api/flashcards/detail/${deckId}`),
-  generate: (circleId: string, title: string, topic?: string, num?: number) =>
+  generate: (circleId: string, title: string, noteIds: string[], num?: number) =>
     api.post<FlashcardDeck>("/api/flashcards/generate", {
       circle_id: circleId,
       title,
-      topic: topic ?? "",
+      note_ids: noteIds,
       num_cards: num ?? 10,
     }),
 };
@@ -116,6 +121,7 @@ export interface Circle {
   owner_id: string;
   storage_bytes: number;
   members?: { id: string; display_name: string; email: string }[];
+  member_count?: number;
   created_at: string;
 }
 

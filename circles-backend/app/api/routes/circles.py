@@ -81,7 +81,8 @@ async def list_my_circles(current_user: dict = Depends(get_current_user)):
         rows = await conn.fetch(
             """
             SELECT c.*,
-                COALESCE((SELECT SUM(size_bytes) FROM notes WHERE circle_id = c.id), 0) AS storage_bytes
+                COALESCE((SELECT SUM(size_bytes) FROM notes WHERE circle_id = c.id), 0) AS storage_bytes,
+                (SELECT COUNT(*) FROM circle_members WHERE circle_id = c.id) AS member_count
             FROM circles c
             JOIN circle_members cm ON cm.circle_id = c.id
             WHERE cm.user_id = $1
