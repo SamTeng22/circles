@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { quizApi, Quiz, Question, getQuestionLanguage } from "@/lib/api";
+import { SoundToggle } from "@/components/SoundToggle";
+import { playSound } from "@/lib/sound";
 
 const LANGUAGE_LABELS: Record<string, string> = {
   en: "English",
@@ -120,6 +122,7 @@ export default function LiveQuizPage() {
         if (msg.language) setLanguage(msg.language);
         const total = countForLanguage(quizRef.current, msg.language ?? null);
         const isFinished = msg.question_index >= total;
+        if (isFinished) playSound("complete");
         setPhase(isFinished ? "finished" : "question");
         setQuestionIndex(msg.question_index);
         setSelectedAnswer(null);
@@ -134,6 +137,7 @@ export default function LiveQuizPage() {
       case "answer_received":
         if (msg.user_id === userId) {
           setAnswerResult(msg.correct ? "correct" : "wrong");
+          playSound(msg.correct ? "correct" : "wrong");
         }
         break;
 
@@ -286,9 +290,12 @@ export default function LiveQuizPage() {
       {/* Top bar */}
       <div className="bg-white border-b px-4 py-3 flex items-center justify-between">
         <span className="text-sm font-medium">{quiz?.title}</span>
-        <span className="text-sm text-gray-400">
-          {questionIndex + 1} / {totalQuestions}
-        </span>
+        <div className="flex items-center gap-3">
+          <SoundToggle />
+          <span className="text-sm text-gray-400">
+            {questionIndex + 1} / {totalQuestions}
+          </span>
+        </div>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
