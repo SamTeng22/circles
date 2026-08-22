@@ -65,5 +65,12 @@ async def test_strips_markdown_code_fence(monkeypatch):
     assert cards[0]["back"] == "A"
 
 
-def test_strip_code_fence_passes_through_bare_json():
-    assert fg._strip_code_fence('  [{"front":"a"}] ') == '[{"front":"a"}]'
+async def test_repairs_unescaped_latex_backslashes(monkeypatch):
+    raw = r'[{"front": "Derivative of $x^3$?", "back": "$\frac{d}{dx} x^3 = 3x^2$", "hint": ""}]'
+    _patch(monkeypatch, raw=raw)
+
+    cards = await fg.generate_flashcards(
+        [{"filename": "notes.txt", "content": "calc notes"}], 1
+    )
+
+    assert cards[0]["back"] == r"$\frac{d}{dx} x^3 = 3x^2$"

@@ -1,6 +1,6 @@
-import json
 import google.generativeai as genai
 from app.core.config import settings
+from app.services.json_utils import parse_llm_json
 
 genai.configure(api_key=settings.GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
@@ -28,6 +28,12 @@ Language rules:
 - Write each question (question text, options, correct_answer, explanation) in the SAME language as the note it is drawn from. If a question draws on multiple notes in different languages, use the language of the note it primarily draws from.
 - Tag every question with a "language" field using EXACTLY one of these codes: "en" (English), "tl" (Tagalog/Filipino), "zh" (Chinese). Do not use any other code or a language name.
 - It is fine and expected for different questions in the same output to use different languages if the source notes differ in language.
+
+Math notation rules:
+- The study notes may contain mathematical notation written in LaTeX, delimited by $...$ (inline) or $$...$$ (block), e.g. $x^2 + 3x - 4 = 0$. Interpret this notation correctly when reasoning about the material.
+- When your own output involves math (equations, fractions, exponents, derivatives, integrals, variables, Greek letters, etc.), write it using the same convention: $...$ inline, $$...$$ for a standalone equation, using real LaTeX commands (\\frac{{}}{{}}, \\sqrt{{}}, \\int, \\sum, \\partial, \\alpha, ...) rather than Unicode math symbols or plain-text approximations. Prefer inline $...$ in "options" and "correct_answer"; reserve $$...$$ mostly for "explanation" if a derivation needs its own line.
+- If a note contains a fully worked math example (a specific equation with its solution), do NOT just repeat that exact problem back as a question. Treat it as a template: write a NEW problem of the same type and difficulty with different numbers, coefficients, or variables, and solve that new problem yourself for "correct_answer"/"explanation". Only reuse the note's own numbers for a pure recall question (e.g. "what method solves this form of equation"), not for a "solve for x"-style question.
+- CRITICAL for valid JSON: every backslash in a LaTeX command must be written as a doubled backslash so the JSON parses correctly — the string content should look like $\\\\frac{{1}}{{2}}$ so that after JSON parsing it becomes $\\frac{{1}}{{2}}$. Double-check every LaTeX command in your output has doubled backslashes.
 
 Return ONLY a valid JSON array with this exact format, no markdown, no extra text:
 [
@@ -61,16 +67,21 @@ Example of a Chinese-sourced question:
   "explanation": "光合作用利用阳光将二氧化碳和水转化为葡萄糖和氧气。"
 }}
 
+Example of a math question (note the doubled backslashes in the LaTeX):
+{{
+  "question": "Solve $x^2 - 5x + 6 = 0$ for x.",
+  "options": ["A. $x = 2, 3$", "B. $x = -2, -3$", "C. $x = 1, 6$", "D. $x = 0, 5$"],
+  "correct_answer": "A. $x = 2, 3$",
+  "bloom_level": "applying",
+  "language": "en",
+  "explanation": "Factoring gives $(x - 2)(x - 3) = 0$, so by the quadratic formula $x = \\\\frac{{5 \\\\pm \\\\sqrt{{25 - 24}}}}{{2}} = 2 \\\\text{{ or }} 3$."
+}}
+
 Study notes:
 {context}
 """
     response = model.generate_content(prompt)
-    text = response.text.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-    questions = json.loads(text)
+    questions = parse_llm_json(response.text)
     for q in questions:
         if q.get("language") not in ("en", "tl", "zh"):
             q["language"] = "en"

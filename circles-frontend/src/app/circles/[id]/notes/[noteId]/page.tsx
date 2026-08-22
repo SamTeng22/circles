@@ -6,6 +6,9 @@ import { circlesApi, notesApi, Circle, Note } from "@/lib/api";
 import { Sidebar } from "@/components/Sidebar";
 import { PigLoader } from "@/components/PigLoader";
 import { PigProcessing } from "@/components/PigProcessing";
+import { MathText } from "@/components/MathText";
+import { MathToolbar } from "@/components/MathToolbar";
+import { insertSnippet, type MathSnippet } from "@/lib/mathSnippets";
 import { timeAgo } from "@/lib/format";
 
 export default function NoteDetailPage() {
@@ -37,6 +40,19 @@ export default function NoteDetailPage() {
   useEffect(() => {
     if (editing) autoResizeEditor();
   }, [editing]);
+
+  function handleInsertSnippet(snippet: MathSnippet) {
+    const el = editorRef.current;
+    if (!el) return;
+    const { newValue, caretStart, caretEnd } = insertSnippet(el, editContent, snippet);
+    setEditContent(newValue);
+    requestAnimationFrame(() => {
+      el.focus();
+      el.selectionStart = caretStart;
+      el.selectionEnd = caretEnd;
+      autoResizeEditor();
+    });
+  }
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
@@ -217,19 +233,35 @@ export default function NoteDetailPage() {
 
           <div className="doc-page">
             {editing ? (
-              <textarea
-                ref={editorRef}
-                className="doc-editor"
-                value={editContent}
-                onChange={(e) => {
-                  setEditContent(e.target.value);
-                  autoResizeEditor();
-                }}
-                disabled={saving}
-                autoFocus
-              />
+              <>
+                <MathToolbar onInsert={handleInsertSnippet} />
+                <p className="math-editor-hint">
+                  Wrap math in $…$ (inline) or $$…$$ (block); use \$ for a literal dollar sign.
+                </p>
+                <textarea
+                  ref={editorRef}
+                  className="doc-editor"
+                  value={editContent}
+                  onChange={(e) => {
+                    setEditContent(e.target.value);
+                    autoResizeEditor();
+                  }}
+                  disabled={saving}
+                  autoFocus
+                />
+                {editContent.trim() && (
+                  <div className="doc-live-preview">
+                    <span className="math-toolbar-label">Preview</span>
+                    <div className="doc-text">
+                      <MathText text={editContent} />
+                    </div>
+                  </div>
+                )}
+              </>
             ) : editContent.trim() ? (
-              <div className="doc-text">{editContent}</div>
+              <div className="doc-text">
+                <MathText text={editContent} />
+              </div>
             ) : (
               <p className="sub" style={{ fontSize: 13.5 }}>
                 No extracted text yet{note.status === "failed" ? " — extraction failed for this file." : "."}
