@@ -511,6 +511,7 @@ footer { border-top: 1px solid var(--line); background: var(--surface); }
 .app .lens { position: relative; height: 360px; border-radius: 14px; background: radial-gradient(circle at 50% 46%,#FBFAFE,#F1EFF8); overflow: hidden; }
 .app .lens .blob { position: absolute; border-radius: 50%; mix-blend-mode: multiply; opacity: .5; transform: translate(-50%,-50%); }
 .app .lens-core { position: absolute; left: 50%; top: 46%; transform: translate(-50%,-50%); width: 118px; height: 118px; border-radius: 50%; border: 2px dashed rgba(21,19,42,.4); display: grid; place-items: center; text-align: center; z-index: 5; background: rgba(252,251,254,.55); }
+.app .lens-core div { display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .app .lens-core b { font-size: 22px; font-weight: 700; font-family: var(--font-mono), ui-monospace, monospace; }
 .app .lens-core span { font-family: var(--font-mono), ui-monospace, monospace; font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-2); }
 .app .lens-legend { display: flex; flex-wrap: wrap; gap: 10px 16px; padding: 14px 10px 8px; }

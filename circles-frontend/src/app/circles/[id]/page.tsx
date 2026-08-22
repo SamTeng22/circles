@@ -154,23 +154,6 @@ export default function CircleDetailPage() {
 
   const members = circle?.members ?? [];
 
-  // Rough consensus score: share of notes that aren't on either side of a
-  // recorded conflict. Not a true "agreement" measure (a note can be
-  // conflict-free just because nothing overlapping was ever compared to it),
-  // but it's the only signal the backend currently persists.
-  const conflictedNoteIds = useMemo(() => {
-    const ids = new Set<string>();
-    conflicts.forEach((c) => {
-      ids.add(c.note_a_id);
-      ids.add(c.note_b_id);
-    });
-    return ids;
-  }, [conflicts]);
-  const consensusPct =
-    notes.length > 0
-      ? Math.round(((notes.length - conflictedNoteIds.size) / notes.length) * 100)
-      : null;
-
   // Resolve the current user's DB id (members carry it, Firebase only gives email).
   const myId = useMemo(
     () => members.find((m) => m.email === user?.email)?.id ?? null,
@@ -517,8 +500,14 @@ export default function CircleDetailPage() {
                   })()}
                   <div className="lens-core">
                     <div>
-                      <b>{consensusPct === null ? "—" : `${consensusPct}%`}</b>
-                      <span>{consensusPct === null ? "no notes yet" : "consensus"}</span>
+                      <b>{notes.length === 0 ? "—" : conflicts.length}</b>
+                      <span>
+                        {notes.length === 0
+                          ? "no notes yet"
+                          : conflicts.length === 1
+                          ? "conflict found"
+                          : "conflicts found"}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -530,10 +519,6 @@ export default function CircleDetailPage() {
                   ))}
                 </div>
               </div>
-              <p className="sub" style={{ fontSize: 13, marginTop: 12, padding: "0 4px" }}>
-                Each circle is one member&apos;s notes. Where they overlap, the group agrees — that
-                dense centre would become your verified set.
-              </p>
             </div>
             {conflicts.length === 0 ? (
               <div className="panel">
@@ -799,12 +784,13 @@ export default function CircleDetailPage() {
                     style={{
                       display: "flex",
                       flexDirection: "column",
-                      gap: 6,
+                      gap: 4,
                       maxHeight: 220,
                       overflowY: "auto",
+                      overflowX: "auto",
                       border: "1px solid var(--line)",
                       borderRadius: 12,
-                      padding: 8,
+                      padding: 6,
                     }}
                   >
                     {readyNotes.map((n) => {
@@ -817,9 +803,12 @@ export default function CircleDetailPage() {
                           style={{
                             display: "flex",
                             alignItems: "center",
-                            gap: 8,
-                            padding: "6px 8px",
+                            gap: 6,
+                            padding: "6px 8px 6px 4px",
                             borderRadius: 8,
+                            width: "max-content",
+                            minWidth: "100%",
+                            whiteSpace: "nowrap",
                             opacity: disabled ? 0.45 : 1,
                             cursor: disabled ? "not-allowed" : "pointer",
                           }}
@@ -829,11 +818,10 @@ export default function CircleDetailPage() {
                             checked={selected}
                             disabled={disabled}
                             onChange={() => toggleGenNote(n)}
+                            style={{ flex: "none", width: 14, height: 14, margin: 0 }}
                           />
-                          <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {n.filename}
-                          </span>
-                          <span className="sub" style={{ fontSize: 11.5, flex: "none" }}>
+                          <span style={{ flex: "none", fontSize: 13.5 }}>{n.filename}</span>
+                          <span className="sub" style={{ fontSize: 11.5, flex: "none", marginLeft: 10 }}>
                             {n.uploader_name} · {chars.toLocaleString()} chars
                           </span>
                         </label>
