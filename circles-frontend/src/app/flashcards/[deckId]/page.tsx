@@ -5,6 +5,8 @@ import { useAuth } from "@/lib/AuthContext";
 import { flashcardsApi, FlashcardDeck } from "@/lib/api";
 import { PigLoader } from "@/components/PigLoader";
 import { MathText } from "@/components/MathText";
+import { SoundToggle } from "@/components/SoundToggle";
+import { playSound } from "@/lib/sound";
 
 export default function StudyDeckPage() {
   const { deckId } = useParams<{ deckId: string }>();
@@ -81,12 +83,17 @@ export default function StudyDeckPage() {
     router.push(deck ? `/circles/${deck.circle_id}` : "/dashboard");
   }
 
+  function flipCard() {
+    playSound("flip");
+    setFlipped((f) => !f);
+  }
+
   // Keyboard: space/enter flips, arrows navigate.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === " " || e.key === "Enter") {
         e.preventDefault();
-        setFlipped((f) => !f);
+        flipCard();
       } else if (e.key === "ArrowRight") {
         next();
       } else if (e.key === "ArrowLeft") {
@@ -146,6 +153,7 @@ export default function StudyDeckPage() {
             </div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
+            <SoundToggle />
             <button className="btn btn-ghost btn-sm" onClick={shuffle}>
               Shuffle
             </button>
@@ -161,7 +169,7 @@ export default function StudyDeckPage() {
 
         {/* Flip card */}
         <button
-          onClick={() => setFlipped((f) => !f)}
+          onClick={flipCard}
           title="Click or press space to flip"
           style={{
             display: "flex",

@@ -5,6 +5,8 @@ import { useAuth } from "@/lib/AuthContext";
 import { quizApi, Quiz } from "@/lib/api";
 import { PigLoader } from "@/components/PigLoader";
 import { MathText } from "@/components/MathText";
+import { SoundToggle } from "@/components/SoundToggle";
+import { playSound } from "@/lib/sound";
 
 export default function SoloQuizPage() {
   const { quizId } = useParams<{ quizId: string }>();
@@ -65,6 +67,7 @@ export default function SoloQuizPage() {
     } finally {
       setSubmitting(false);
       setPhase("results");
+      playSound("complete");
       window.scrollTo(0, 0);
     }
   }
@@ -128,9 +131,12 @@ export default function SoloQuizPage() {
               <h1>{quiz.title}</h1>
               <div className="solo-progress">Solo practice · complete</div>
             </div>
-            <button className="btn btn-ghost btn-sm" onClick={leave}>
-              Back to circle
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <SoundToggle />
+              <button className="btn btn-ghost btn-sm" onClick={leave}>
+                Back to circle
+              </button>
+            </div>
           </div>
 
           <div className="solo-card">
@@ -204,9 +210,12 @@ export default function SoloQuizPage() {
               Question {current + 1} of {total}
             </div>
           </div>
-          <button className="btn btn-ghost btn-sm" onClick={leave}>
-            Leave
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <SoundToggle />
+            <button className="btn btn-ghost btn-sm" onClick={leave}>
+              Leave
+            </button>
+          </div>
         </div>
 
         <div className="solo-bar">
