@@ -82,6 +82,22 @@ async def test_clamps_unrecognized_language_code(monkeypatch):
     assert questions[0]["language"] == "en"
 
 
+async def test_repairs_unescaped_latex_backslashes(monkeypatch):
+    raw = (
+        r'[{"question": "What is $\frac{1}{2} + \frac{1}{3}$?", '
+        r'"options": ["A. $\frac{5}{6}$", "B. $\frac{2}{5}$"], '
+        r'"correct_answer": "A. $\frac{5}{6}$", "bloom_level": "applying", "explanation": ""}]'
+    )
+    _patch(monkeypatch, raw=raw)
+
+    questions = await qg.generate_quiz_questions(
+        [{"filename": "notes.txt", "content": "fractions"}], 1
+    )
+
+    assert questions[0]["question"] == r"What is $\frac{1}{2} + \frac{1}{3}$?"
+    assert questions[0]["correct_answer"] == r"A. $\frac{5}{6}$"
+
+
 async def test_strips_markdown_code_fence(monkeypatch):
     raw = (
         '```json\n[{"question": "Q", "options": ["A", "B"], "correct_answer": "A", '

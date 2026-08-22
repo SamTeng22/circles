@@ -4,6 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { flashcardsApi, FlashcardDeck } from "@/lib/api";
 import { PigLoader } from "@/components/PigLoader";
+import { MathText } from "@/components/MathText";
 
 export default function StudyDeckPage() {
   const { deckId } = useParams<{ deckId: string }>();
@@ -188,11 +189,11 @@ export default function StudyDeckPage() {
             {flipped ? "Answer" : "Prompt"}
           </span>
           <span style={{ fontSize: 22, lineHeight: 1.4, fontWeight: flipped ? 400 : 600 }}>
-            {flipped ? card?.back : card?.front}
+            <MathText text={flipped ? card?.back : card?.front} />
           </span>
           {!flipped && card?.hint ? (
             <span className="sub" style={{ fontSize: 13 }}>
-              Hint: {card.hint}
+              Hint: <MathText text={card.hint} />
             </span>
           ) : null}
           <span className="sub" style={{ fontSize: 12, marginTop: 6 }}>

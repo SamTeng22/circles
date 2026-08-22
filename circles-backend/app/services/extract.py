@@ -35,6 +35,10 @@ def extract_text(data: bytes, content_type: str, filename: str = "") -> str:
 
 
 def _pdf_text_layer(data: bytes) -> str:
+    # Extracts whatever Unicode the PDF's own text layer contains; it can't
+    # reconstruct LaTeX from vector-drawn equation objects (e.g. Word's
+    # Equation Editor), so math in these notes may need a manual touch-up
+    # via the note editor's math toolbar after upload.
     pdf = pdfium.PdfDocument(data)
     try:
         return "\n".join(page.get_textpage().get_text_range() for page in pdf)
@@ -63,8 +67,13 @@ def _gemini_ocr(images: list[bytes], mime: str = "image/png") -> str:
         return ""
     model = genai.GenerativeModel("gemini-2.5-flash")
     parts: list = [
-        "Extract all readable text from these document pages. "
-        "Output only the extracted text, preserving reading order. Do not add commentary."
+        "Extract all readable text from these document pages, preserving reading order. "
+        "When you encounter mathematical notation - equations, fractions, exponents, "
+        "derivatives, integrals, Greek letters, summations, or other math symbols, whether "
+        "printed or handwritten - transcribe it as LaTeX, wrapping inline math in single "
+        "dollar signs ($...$) and standalone/display equations in double dollar signs "
+        "($$...$$). Output only the extracted text (with embedded LaTeX where applicable). "
+        "Do not add commentary."
     ]
     for img in images:
         parts.append({"mime_type": mime, "data": img})

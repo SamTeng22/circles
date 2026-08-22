@@ -4,6 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { quizApi, Quiz } from "@/lib/api";
 import { PigLoader } from "@/components/PigLoader";
+import { MathText } from "@/components/MathText";
 
 export default function SoloQuizPage() {
   const { quizId } = useParams<{ quizId: string }>();
@@ -147,7 +148,7 @@ export default function SoloQuizPage() {
               return (
                 <div key={i} className="review-item">
                   <p className="rq">
-                    {i + 1}. {qq.question}
+                    {i + 1}. <MathText text={qq.question} />
                   </p>
                   <div className="solo-opts">
                     {qq.options.map((opt) => {
@@ -158,7 +159,7 @@ export default function SoloQuizPage() {
                           key={opt}
                           className={`solo-opt${isCorrect ? " correct" : ""}${isYourWrong ? " wrong" : ""}`}
                         >
-                          <span>{opt}</span>
+                          <span><MathText text={opt} /></span>
                           {isCorrect && <span className="mark" style={{ color: "var(--jade)" }}>✓</span>}
                           {isYourWrong && <span className="mark" style={{ color: "var(--persimmon)" }}>your answer</span>}
                         </div>
@@ -170,7 +171,7 @@ export default function SoloQuizPage() {
                   )}
                   {qq.explanation && (
                     <p className="review-expl">
-                      <b>Why:</b> {qq.explanation}
+                      <b>Why:</b> <MathText text={qq.explanation} />
                     </p>
                   )}
                 </div>
@@ -213,7 +214,7 @@ export default function SoloQuizPage() {
         </div>
 
         <div className="solo-card">
-          <p className="solo-q">{q.question}</p>
+          <p className="solo-q"><MathText text={q.question} /></p>
           <div className="solo-opts">
             {q.options.map((opt) => (
               <button
@@ -221,7 +222,7 @@ export default function SoloQuizPage() {
                 className={`solo-opt${selected === opt ? " selected" : ""}`}
                 onClick={() => choose(opt)}
               >
-                <span>{opt}</span>
+                <span><MathText text={opt} /></span>
                 {selected === opt && <span className="mark" style={{ color: "var(--cobalt)" }}>●</span>}
               </button>
             ))}
