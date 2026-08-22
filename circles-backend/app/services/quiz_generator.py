@@ -8,20 +8,44 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 def build_context(notes: list[dict]) -> str:
     return "\n\n".join(f"### {n['filename']}\n{n['content']}" for n in notes)
 
+
+_DIFFICULTY_INSTRUCTIONS = {
+    "easy": (
+        "Difficulty: EASY. Favor \"remembering\" questions, with a few \"understanding\" - direct recall "
+        "of facts/definitions and straightforward explanations, minimal \"applying\". If a question "
+        "involves math, keep it single-step with small, clean numbers (e.g. small whole numbers)."
+    ),
+    "medium": (
+        "Difficulty: MEDIUM. Use a mix of \"remembering\", \"understanding\", and \"applying\" questions. "
+        "If a question involves math, it can require a couple of steps and moderately-sized numbers."
+    ),
+    "hard": (
+        "Difficulty: HARD. Favor \"understanding\" and \"applying\" questions that require real "
+        "reasoning, not just recall - minimal \"remembering\". If a question involves math, it should "
+        "require multiple steps (e.g. simplifying before solving, combining two concepts) and use "
+        "numbers that don't reduce trivially (fractions, negatives, larger coefficients)."
+    ),
+}
+
+
 async def generate_quiz_questions(
     notes: list[dict],
     num_questions: int,
+    difficulty: str = "medium",
 ) -> list[dict]:
     if not notes:
         return []
 
     context = build_context(notes)
+    difficulty_instructions = _DIFFICULTY_INSTRUCTIONS.get(difficulty, _DIFFICULTY_INSTRUCTIONS["medium"])
     prompt = f"""You are a quiz generator. Based on the study notes below, generate {num_questions} multiple choice questions.
 
-Use a mix of Bloom's taxonomy levels:
+Bloom's taxonomy levels available for the "bloom_level" field:
 - Remembering: recall facts
 - Understanding: explain concepts
 - Applying: use knowledge in a new situation
+
+{difficulty_instructions}
 
 Language rules:
 - Each note below is written in one of: English, Tagalog, or Chinese.

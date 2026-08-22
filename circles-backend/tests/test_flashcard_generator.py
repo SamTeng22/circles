@@ -21,6 +21,16 @@ def _patch(monkeypatch, *, raw):
     monkeypatch.setattr(fg, "model", FakeModel())
 
 
+def _patch_capturing_prompt(monkeypatch, *, raw):
+    captured = {}
+    class FakeModel:
+        def generate_content(self, prompt):
+            captured["prompt"] = prompt
+            return FakeResponse(raw)
+    monkeypatch.setattr(fg, "model", FakeModel())
+    return captured
+
+
 async def test_returns_empty_when_no_notes(monkeypatch):
     # The model must not be called when there's nothing to build cards from.
     def _boom(prompt):
@@ -63,6 +73,27 @@ async def test_strips_markdown_code_fence(monkeypatch):
 
     assert cards[0]["front"] == "Q"
     assert cards[0]["back"] == "A"
+
+
+async def test_defaults_to_medium_difficulty(monkeypatch):
+    raw = '[{"front": "Q", "back": "A", "hint": ""}]'
+    captured = _patch_capturing_prompt(monkeypatch, raw=raw)
+
+    await fg.generate_flashcards([{"filename": "n.txt", "content": "c"}], 1)
+
+    assert "Difficulty: MEDIUM" in captured["prompt"]
+
+
+@pytest.mark.parametrize("difficulty,label", [("easy", "EASY"), ("hard", "HARD")])
+async def test_passes_difficulty_into_prompt(monkeypatch, difficulty, label):
+    raw = '[{"front": "Q", "back": "A", "hint": ""}]'
+    captured = _patch_capturing_prompt(monkeypatch, raw=raw)
+
+    await fg.generate_flashcards(
+        [{"filename": "n.txt", "content": "c"}], 1, difficulty=difficulty
+    )
+
+    assert f"Difficulty: {label}" in captured["prompt"]
 
 
 async def test_repairs_unescaped_latex_backslashes(monkeypatch):

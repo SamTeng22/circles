@@ -1,4 +1,5 @@
 import json
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from app.core.config import settings
@@ -48,6 +49,7 @@ class GenerateQuizRequest(BaseModel):
     title: str
     num_questions: int = Field(default=5, ge=1, le=30)
     note_ids: list[str] = Field(min_length=1)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
 
 @router.post("/generate")
 @limiter.limit(quiz_generation_limit)
@@ -64,6 +66,7 @@ async def generate_quiz(
     questions = await generate_quiz_questions(
         notes=notes,
         num_questions=body.num_questions,
+        difficulty=body.difficulty,
     )
 
     async with pool.acquire() as conn:

@@ -9,17 +9,39 @@ genai.configure(api_key=settings.GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
 
 
+_DIFFICULTY_INSTRUCTIONS = {
+    "easy": (
+        "Difficulty: EASY. Favor straightforward recall - key terms, definitions, single facts. If a "
+        "card involves math, keep it single-step with small, clean numbers (e.g. small whole numbers)."
+    ),
+    "medium": (
+        "Difficulty: MEDIUM. Mix simple recall with a few cards that require connecting two ideas "
+        "(cause/effect, comparisons). If a card involves math, it can require a couple of steps and "
+        "moderately-sized numbers."
+    ),
+    "hard": (
+        "Difficulty: HARD. Favor cards that require applying a concept or working through a multi-step "
+        "problem, not just recalling a definition. If a card involves math, it should require multiple "
+        "steps and use numbers that don't reduce trivially (fractions, negatives, larger coefficients)."
+    ),
+}
+
+
 async def generate_flashcards(
     notes: list[dict],
     num_cards: int,
+    difficulty: str = "medium",
 ) -> list[dict]:
     if not notes:
         return []
 
     context = build_context(notes)
+    difficulty_instructions = _DIFFICULTY_INSTRUCTIONS.get(difficulty, _DIFFICULTY_INSTRUCTIONS["medium"])
     prompt = f"""You are a flashcard generator for students. Based on the study notes below, generate {num_cards} flashcards.
 
 Each flashcard has a short prompt on the front and a concise, self-contained answer on the back. Favor one idea per card: key terms, definitions, cause/effect, and important facts. Keep fronts under ~15 words and backs under ~40 words.
+
+{difficulty_instructions}
 
 Language rules:
 - Each note below is written in one of: English, Tagalog, or Chinese.

@@ -1,3 +1,4 @@
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from app.core.config import settings
@@ -47,6 +48,7 @@ class GenerateDeckRequest(BaseModel):
     title: str
     num_cards: int = Field(default=10, ge=1, le=50)
     note_ids: list[str] = Field(min_length=1)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
 
 @router.post("/generate")
 @limiter.limit(flashcard_generation_limit)
@@ -63,6 +65,7 @@ async def generate_deck(
     cards = await generate_flashcards(
         notes=notes,
         num_cards=body.num_cards,
+        difficulty=body.difficulty,
     )
     if not cards:
         raise HTTPException(
