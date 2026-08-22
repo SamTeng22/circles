@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
-import { circlesApi, notesApi, quizApi, flashcardsApi, Circle, Note, Quiz, FlashcardDeck } from "@/lib/api";
+import { circlesApi, notesApi, quizApi, flashcardsApi, Circle, Note, Quiz, FlashcardDeck, GENERATION_CONTEXT_CHAR_LIMIT } from "@/lib/api";
 import { Sidebar } from "@/components/Sidebar";
 import { PigLoader } from "@/components/PigLoader";
 import { PigProcessing } from "@/components/PigProcessing";
@@ -44,7 +44,7 @@ export default function CircleDetailPage() {
   const [genMode, setGenMode] = useState<"quiz" | "flashcards">("quiz");
   const [showGen, setShowGen] = useState(false);
   const [genTitle, setGenTitle] = useState("");
-  const [genTopic, setGenTopic] = useState("");
+  const [genSelectedNoteIds, setGenSelectedNoteIds] = useState<string[]>([]);
   const [genNum, setGenNum] = useState(5);
   const [genBusy, setGenBusy] = useState(false);
   const [genError, setGenError] = useState("");
@@ -283,22 +283,41 @@ export default function CircleDetailPage() {
   function openGen(mode: "quiz" | "flashcards") {
     setGenMode(mode);
     setGenTitle("");
-    setGenTopic("");
+    setGenSelectedNoteIds([]);
     setGenNum(mode === "quiz" ? 5 : 10);
     setGenError("");
     setShowGen(true);
   }
 
+  const readyNotes = useMemo(() => notes.filter((n) => n.status === "ready"), [notes]);
+  const genSelectedChars = useMemo(
+    () =>
+      genSelectedNoteIds.reduce((sum, nid) => {
+        const n = readyNotes.find((rn) => rn.id === nid);
+        return sum + (n?.content?.length ?? 0);
+      }, 0),
+    [genSelectedNoteIds, readyNotes]
+  );
+
+  function toggleGenNote(n: Note) {
+    setGenSelectedNoteIds((prev) => {
+      if (prev.includes(n.id)) return prev.filter((nid) => nid !== n.id);
+      const wouldBeChars = genSelectedChars + (n.content?.length ?? 0);
+      if (wouldBeChars > GENERATION_CONTEXT_CHAR_LIMIT) return prev;
+      return [...prev, n.id];
+    });
+  }
+
   async function handleGenerate() {
-    if (!genTitle.trim()) return;
+    if (!genTitle.trim() || genSelectedNoteIds.length === 0) return;
     setGenBusy(true);
     setGenError("");
     try {
       if (genMode === "quiz") {
-        const quiz = await quizApi.generate(id, genTitle.trim(), genTopic.trim() || undefined, genNum);
+        const quiz = await quizApi.generate(id, genTitle.trim(), genSelectedNoteIds, genNum);
         setQuizzes([quiz, ...quizzes]);
       } else {
-        const deck = await flashcardsApi.generate(id, genTitle.trim(), genTopic.trim() || undefined, genNum);
+        const deck = await flashcardsApi.generate(id, genTitle.trim(), genSelectedNoteIds, genNum);
         setDecks([deck, ...decks]);
       }
       setShowGen(false);
@@ -695,12 +714,63 @@ export default function CircleDetailPage() {
               />
             </div>
             <div className="field">
-              <input
-                className="tinp"
-                placeholder="Topic to focus on (optional)"
-                value={genTopic}
-                onChange={(e) => setGenTopic(e.target.value)}
-              />
+              <label>Notes to generate from</label>
+              {readyNotes.length === 0 ? (
+                <p className="sub" style={{ fontSize: 13, margin: "4px 0 0" }}>
+                  No notes ready to generate from yet — upload some first.
+                </p>
+              ) : (
+                <>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                      maxHeight: 220,
+                      overflowY: "auto",
+                      border: "1px solid var(--line)",
+                      borderRadius: 12,
+                      padding: 8,
+                    }}
+                  >
+                    {readyNotes.map((n) => {
+                      const selected = genSelectedNoteIds.includes(n.id);
+                      const chars = n.content?.length ?? 0;
+                      const disabled = !selected && genSelectedChars + chars > GENERATION_CONTEXT_CHAR_LIMIT;
+                      return (
+                        <label
+                          key={n.id}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            padding: "6px 8px",
+                            borderRadius: 8,
+                            opacity: disabled ? 0.45 : 1,
+                            cursor: disabled ? "not-allowed" : "pointer",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            disabled={disabled}
+                            onChange={() => toggleGenNote(n)}
+                          />
+                          <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {n.filename}
+                          </span>
+                          <span className="sub" style={{ fontSize: 11.5, flex: "none" }}>
+                            {n.uploader_name} · {chars.toLocaleString()} chars
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <p className="sub" style={{ fontSize: 12, margin: "6px 0 0" }}>
+                    {genSelectedChars.toLocaleString()} / {GENERATION_CONTEXT_CHAR_LIMIT.toLocaleString()} characters selected
+                  </p>
+                </>
+              )}
             </div>
             <div className="field">
               <input
@@ -722,7 +792,11 @@ export default function CircleDetailPage() {
               <button className="btn btn-ghost btn-sm" onClick={() => setShowGen(false)} disabled={genBusy}>
                 Cancel
               </button>
-              <button className="btn btn-primary btn-sm" onClick={handleGenerate} disabled={genBusy || !genTitle.trim()}>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={handleGenerate}
+                disabled={genBusy || !genTitle.trim() || genSelectedNoteIds.length === 0}
+              >
                 {genBusy ? "Generating…" : "Generate"}
               </button>
             </div>

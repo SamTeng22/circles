@@ -1,44 +1,21 @@
 import json
 import google.generativeai as genai
 from app.core.config import settings
-from app.db.database import get_pool
-from app.services.embedding import embed_text
 
 genai.configure(api_key=settings.GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
 
-async def retrieve_chunks(circle_id: str, topic: str, k: int = 10) -> list[str]:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        if topic:
-            query_embedding = await embed_text(topic)
-            embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
-            rows = await conn.fetch(
-                """
-                SELECT content FROM note_chunks
-                WHERE circle_id = $1
-                ORDER BY embedding <-> $2::vector
-                LIMIT $3
-                """,
-                circle_id, embedding_str, k,
-            )
-        else:
-            rows = await conn.fetch(
-                "SELECT content FROM note_chunks WHERE circle_id = $1 LIMIT $2",
-                circle_id, k,
-            )
-    return [r["content"] for r in rows]
+def build_context(notes: list[dict]) -> str:
+    return "\n\n".join(f"### {n['filename']}\n{n['content']}" for n in notes)
 
 async def generate_quiz_questions(
-    circle_id: str,
-    topic: str,
+    notes: list[dict],
     num_questions: int,
 ) -> list[dict]:
-    chunks = await retrieve_chunks(circle_id, topic)
-    if not chunks:
+    if not notes:
         return []
 
-    context = "\n\n".join(chunks)
+    context = build_context(notes)
     prompt = f"""You are a quiz generator. Based on the study notes below, generate {num_questions} multiple choice questions.
 
 Use a mix of Bloom's taxonomy levels:
