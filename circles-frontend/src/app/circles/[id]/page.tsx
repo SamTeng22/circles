@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { circlesApi, notesApi, quizApi, flashcardsApi, conflictsApi, Circle, Note, Quiz, FlashcardDeck, Conflict, Difficulty, GENERATION_CONTEXT_CHAR_LIMIT } from "@/lib/api";
 import { Sidebar } from "@/components/Sidebar";
@@ -53,10 +53,13 @@ function computeLensLayout(memberIds: string[], conflicts: Conflict[]): LensPos[
   });
 }
 
-export default function CircleDetailPage() {
+const VALID_TABS: Tab[] = ["consensus", "notes", "quizzes", "flashcards"];
+
+function CircleDetailPageInner() {
   const { id } = useParams<{ id: string }>();
   const { user, loading } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [allCircles, setAllCircles] = useState<Circle[]>([]);
   const [circle, setCircle] = useState<Circle | null>(null);
@@ -66,7 +69,14 @@ export default function CircleDetailPage() {
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [tab, setTab] = useState<Tab>("notes");
+
+  // Tab lives in the URL (?tab=quizzes) so the sidebar can deep-link into a
+  // specific tab of the currently open circle.
+  const tabParam = searchParams.get("tab");
+  const tab: Tab = (VALID_TABS as string[]).includes(tabParam ?? "") ? (tabParam as Tab) : "notes";
+  function setTab(t: Tab) {
+    router.replace(`/circles/${id}?tab=${t}`, { scroll: false });
+  }
 
   // Notes upload
   const fileRef = useRef<HTMLInputElement>(null);
@@ -404,7 +414,12 @@ export default function CircleDetailPage() {
 
   return (
     <div className="app">
-      <Sidebar user={user} circles={allCircles} activeCircleId={id} />
+      <Sidebar
+        user={user}
+        circles={allCircles}
+        activeCircleId={id}
+        activeTab={tab === "quizzes" || tab === "flashcards" ? tab : undefined}
+      />
 
       <main className="main">
         <div className="topbar">
@@ -1184,5 +1199,13 @@ export default function CircleDetailPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function CircleDetailPage() {
+  return (
+    <Suspense>
+      <CircleDetailPageInner />
+    </Suspense>
   );
 }
