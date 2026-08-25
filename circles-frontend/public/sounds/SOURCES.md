@@ -14,3 +14,11 @@ attribution required, no account needed to download.
 `flip.wav` and `complete.wav` were trimmed with a fade-out from the original
 downloads to keep them snappy for repeated UI use; `correct.wav` and
 `wrong.wav` are used near-verbatim.
+
+## Missing: `start.wav`, `tick.wav`
+
+`circles-frontend/src/lib/sound.ts` references `start.wav` (played when a live-quiz
+question begins) and `tick.wav` (played once per second for the last 3 seconds of a
+question's timer), but neither file has been added to this folder yet. Live quiz will
+silently no-op on these two cues (`playSound` ignores a failed/missing-file `.play()`)
+until they're sourced the same way as the set above and dropped in here.

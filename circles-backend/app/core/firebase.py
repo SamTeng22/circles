@@ -21,10 +21,7 @@ if not firebase_admin._apps:
         )
     firebase_admin.initialize_app(cred, {"projectId": settings.FIREBASE_PROJECT_ID})
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-):
-    token = credentials.credentials
+async def resolve_user_from_token(token: str) -> dict:
     try:
         decoded = auth.verify_id_token(token)
     except Exception:
@@ -52,3 +49,9 @@ async def get_current_user(
                 decoded.get("name"),
             )
     return dict(user)
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+):
+    return await resolve_user_from_token(credentials.credentials)
