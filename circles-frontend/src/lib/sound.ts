@@ -6,6 +6,8 @@ const SOUND_FILES = {
   wrong: "/sounds/wrong.wav",
   flip: "/sounds/flip.wav",
   complete: "/sounds/complete.wav",
+  start: "/sounds/start.wav",
+  tick: "/sounds/tick.wav",
 } as const;
 
 export type SoundName = keyof typeof SOUND_FILES;

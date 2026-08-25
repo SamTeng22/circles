@@ -6,18 +6,10 @@ from app.core.config import settings
 from app.core.firebase import get_current_user
 from app.core.rate_limit import limiter, identify_user, quiz_generation_limit
 from app.db.database import get_pool
+from app.services.authz import assert_member
 from app.services.quiz_generator import generate_quiz_questions
 
 router = APIRouter()
-
-
-async def _assert_member(conn, circle_id, user_id) -> None:
-    member = await conn.fetchrow(
-        "SELECT 1 FROM circle_members WHERE circle_id = $1 AND user_id = $2",
-        circle_id, user_id,
-    )
-    if not member:
-        raise HTTPException(status_code=403, detail="Not a member of this circle")
 
 
 async def _fetch_selected_notes(conn, circle_id: str, note_ids: list[str]) -> list[dict]:
@@ -60,7 +52,7 @@ async def generate_quiz(
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await _assert_member(conn, body.circle_id, current_user["id"])
+        await assert_member(conn, body.circle_id, current_user["id"])
         notes = await _fetch_selected_notes(conn, body.circle_id, body.note_ids)
 
     questions = await generate_quiz_questions(
@@ -89,7 +81,7 @@ async def get_quiz(
         quiz = await conn.fetchrow("SELECT * FROM quizzes WHERE id = $1", quiz_id)
         if not quiz:
             raise HTTPException(status_code=404, detail="Quiz not found")
-        await _assert_member(conn, quiz["circle_id"], current_user["id"])
+        await assert_member(conn, quiz["circle_id"], current_user["id"])
     return dict(quiz)
 
 @router.get("/{circle_id}")
@@ -99,7 +91,7 @@ async def list_circle_quizzes(
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await _assert_member(conn, circle_id, current_user["id"])
+        await assert_member(conn, circle_id, current_user["id"])
         quizzes = await conn.fetch(
             "SELECT * FROM quizzes WHERE circle_id = $1 ORDER BY created_at DESC",
             circle_id,
@@ -117,7 +109,7 @@ async def submit_quiz(
         quiz = await conn.fetchrow("SELECT * FROM quizzes WHERE id = $1", quiz_id)
         if not quiz:
             raise HTTPException(status_code=404, detail="Quiz not found")
-        await _assert_member(conn, quiz["circle_id"], current_user["id"])
+        await assert_member(conn, quiz["circle_id"], current_user["id"])
         questions = json.loads(quiz["questions"]) if isinstance(quiz["questions"], str) else quiz["questions"]
 
         if len(answers) > len(questions) or any(len(v) > 1000 for v in answers.values()):
