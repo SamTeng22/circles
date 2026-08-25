@@ -4,6 +4,7 @@ import type { User } from "firebase/auth";
 import { Circle } from "@/lib/api";
 import { logout } from "@/lib/firebase";
 import { BrandGlyphLight } from "@/components/BrandGlyph";
+import { PigBounce } from "@/components/PigBounce";
 import { circleColor, initials } from "@/lib/circleStyle";
 
 // Top-level nav. Only "Home" is wired today; the rest land on the dashboard
@@ -66,7 +67,9 @@ export function Sidebar({
         ))}
       </nav>
 
-      <div className="side-spacer" />
+      <div className="side-spacer">
+        <PigBounce pigSize={36} />
+      </div>
 
       <div className="me">
         <div className="av">{displayName.charAt(0).toUpperCase()}</div>

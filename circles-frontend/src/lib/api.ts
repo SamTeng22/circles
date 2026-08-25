@@ -77,29 +77,54 @@ export const notesApi = {
     api.del<{ deleted: string }>(`/api/notes/${circleId}/${noteId}`),
 };
 
+// Total character budget for combined selected-note content per generation
+// call. Mirrors GENERATION_CONTEXT_CHAR_LIMIT in circles-backend/app/core/config.py
+// — keep the two in sync manually.
+export const GENERATION_CONTEXT_CHAR_LIMIT = 40_000;
+
+export type Difficulty = "easy" | "medium" | "hard";
+
 export const quizApi = {
   list: (circleId: string) => api.get<Quiz[]>(`/api/quiz/${circleId}`),
   getById: (quizId: string) => api.get<Quiz>(`/api/quiz/detail/${quizId}`),
-  generate: (circleId: string, title: string, topic?: string, num?: number) =>
+  generate: (
+    circleId: string,
+    title: string,
+    noteIds: string[],
+    num?: number,
+    difficulty?: Difficulty
+  ) =>
     api.post<Quiz>("/api/quiz/generate", {
       circle_id: circleId,
       title,
-      topic: topic ?? "",
+      note_ids: noteIds,
       num_questions: num ?? 5,
+      difficulty: difficulty ?? "medium",
     }),
   submit: (quizId: string, answers: Record<string, string>) =>
     api.post<{ score: number; total: number }>(`/api/quiz/${quizId}/submit`, answers),
 };
 
+export const conflictsApi = {
+  list: (circleId: string) => api.get<Conflict[]>(`/api/conflicts/${circleId}`),
+};
+
 export const flashcardsApi = {
   list: (circleId: string) => api.get<FlashcardDeck[]>(`/api/flashcards/${circleId}`),
   getById: (deckId: string) => api.get<FlashcardDeck>(`/api/flashcards/detail/${deckId}`),
-  generate: (circleId: string, title: string, topic?: string, num?: number) =>
+  generate: (
+    circleId: string,
+    title: string,
+    noteIds: string[],
+    num?: number,
+    difficulty?: Difficulty
+  ) =>
     api.post<FlashcardDeck>("/api/flashcards/generate", {
       circle_id: circleId,
       title,
-      topic: topic ?? "",
+      note_ids: noteIds,
       num_cards: num ?? 10,
+      difficulty: difficulty ?? "medium",
     }),
 };
 
@@ -110,7 +135,9 @@ export interface Circle {
   description: string;
   invite_code: string;
   owner_id: string;
+  storage_bytes: number;
   members?: { id: string; display_name: string; email: string }[];
+  member_count?: number;
   created_at: string;
 }
 
@@ -146,12 +173,36 @@ export interface Question {
   correct_answer: string;
   bloom_level: string;
   explanation: string;
+  language?: string;
+}
+
+export function getQuestionLanguage(q: Question): string {
+  return q.language ?? "en";
+}
+
+export interface Conflict {
+  id: string;
+  circle_id: string;
+  chunk_a_id: string;
+  chunk_b_id: string;
+  note_a_id: string;
+  note_b_id: string;
+  user_a_id: string;
+  user_b_id: string;
+  explanation: string;
+  resolved: boolean;
+  created_at: string;
+  note_a_filename: string;
+  note_b_filename: string;
+  user_a_name: string;
+  user_b_name: string;
 }
 
 export interface Flashcard {
   front: string;
   back: string;
   hint?: string;
+  language?: string;
 }
 
 export interface FlashcardDeck {

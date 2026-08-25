@@ -1,5 +1,7 @@
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from app.core.config import settings
 from app.core.firebase import get_current_user
 from app.core.rate_limit import limiter, identify_user, flashcard_generation_limit
 from app.db.database import get_pool
@@ -17,11 +19,36 @@ async def _assert_member(conn, circle_id, user_id) -> None:
         raise HTTPException(status_code=403, detail="Not a member of this circle")
 
 
+async def _fetch_selected_notes(conn, circle_id: str, note_ids: list[str]) -> list[dict]:
+    rows = await conn.fetch(
+        """
+        SELECT id, filename, content FROM notes
+        WHERE circle_id = $1 AND id = ANY($2::uuid[]) AND status = 'ready'
+        """,
+        circle_id, note_ids,
+    )
+    found_ids = {str(r["id"]) for r in rows}
+    missing = [nid for nid in note_ids if nid not in found_ids]
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Note(s) not found or not ready: {', '.join(missing)}",
+        )
+    total_chars = sum(len(r["content"] or "") for r in rows)
+    if total_chars > settings.GENERATION_CONTEXT_CHAR_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail="Selected notes are too large — remove some and try again",
+        )
+    return [dict(r) for r in rows]
+
+
 class GenerateDeckRequest(BaseModel):
     circle_id: str
     title: str
     num_cards: int = Field(default=10, ge=1, le=50)
-    topic: str = ""
+    note_ids: list[str] = Field(min_length=1)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
 
 @router.post("/generate")
 @limiter.limit(flashcard_generation_limit)
@@ -33,11 +60,12 @@ async def generate_deck(
     pool = await get_pool()
     async with pool.acquire() as conn:
         await _assert_member(conn, body.circle_id, current_user["id"])
+        notes = await _fetch_selected_notes(conn, body.circle_id, body.note_ids)
 
     cards = await generate_flashcards(
-        circle_id=body.circle_id,
-        topic=body.topic,
+        notes=notes,
         num_cards=body.num_cards,
+        difficulty=body.difficulty,
     )
     if not cards:
         raise HTTPException(

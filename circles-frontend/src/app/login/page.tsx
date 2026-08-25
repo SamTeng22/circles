@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { signInWithGoogle, signInWithEmail, resetPassword } from "@/lib/firebase";
 import { BrandGlyphLight } from "@/components/BrandGlyph";
+import { PigLoader } from "@/components/PigLoader";
 
 function GoogleIcon() {
   return (
@@ -94,11 +95,7 @@ export default function LoginPage() {
   }
 
   if (loading) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
-        Loading…
-      </div>
-    );
+    return <PigLoader />;
   }
 
   return (
@@ -106,11 +103,9 @@ export default function LoginPage() {
       {/* LEFT ASIDE */}
       <aside className="auth-aside">
         <div className="stage-grid" />
-        <svg className="auth-aside-rings" viewBox="0 0 200 200">
-          <circle cx="80" cy="80" r="55" fill="#FF5A47" opacity=".5" style={{ mixBlendMode: "screen" }} />
-          <circle cx="120" cy="80" r="55" fill="#3F3AE6" opacity=".5" style={{ mixBlendMode: "screen" }} />
-          <circle cx="100" cy="120" r="55" fill="#0CB78D" opacity=".5" style={{ mixBlendMode: "screen" }} />
-        </svg>
+        <div className="auth-aside-pig">
+          <PigLoader fullscreen={false} size={340} label="" />
+        </div>
         <a className="auth-brand" href="/">
           <BrandGlyphLight />
           <span className="brand-name">Circ<b style={{ color: "var(--persimmon)" }}>l</b>es</span>

@@ -3,6 +3,10 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { quizApi, Quiz } from "@/lib/api";
+import { PigLoader } from "@/components/PigLoader";
+import { MathText } from "@/components/MathText";
+import { SoundToggle } from "@/components/SoundToggle";
+import { playSound } from "@/lib/sound";
 
 export default function SoloQuizPage() {
   const { quizId } = useParams<{ quizId: string }>();
@@ -63,6 +67,7 @@ export default function SoloQuizPage() {
     } finally {
       setSubmitting(false);
       setPhase("results");
+      playSound("complete");
       window.scrollTo(0, 0);
     }
   }
@@ -80,11 +85,7 @@ export default function SoloQuizPage() {
   }
 
   if (loading || !user || pageLoading) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
-        Loading…
-      </div>
-    );
+    return <PigLoader />;
   }
 
   if (loadError || !quiz) {
@@ -130,9 +131,12 @@ export default function SoloQuizPage() {
               <h1>{quiz.title}</h1>
               <div className="solo-progress">Solo practice · complete</div>
             </div>
-            <button className="btn btn-ghost btn-sm" onClick={leave}>
-              Back to circle
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <SoundToggle />
+              <button className="btn btn-ghost btn-sm" onClick={leave}>
+                Back to circle
+              </button>
+            </div>
           </div>
 
           <div className="solo-card">
@@ -150,7 +154,7 @@ export default function SoloQuizPage() {
               return (
                 <div key={i} className="review-item">
                   <p className="rq">
-                    {i + 1}. {qq.question}
+                    {i + 1}. <MathText text={qq.question} />
                   </p>
                   <div className="solo-opts">
                     {qq.options.map((opt) => {
@@ -161,7 +165,7 @@ export default function SoloQuizPage() {
                           key={opt}
                           className={`solo-opt${isCorrect ? " correct" : ""}${isYourWrong ? " wrong" : ""}`}
                         >
-                          <span>{opt}</span>
+                          <span><MathText text={opt} /></span>
                           {isCorrect && <span className="mark" style={{ color: "var(--jade)" }}>✓</span>}
                           {isYourWrong && <span className="mark" style={{ color: "var(--persimmon)" }}>your answer</span>}
                         </div>
@@ -173,7 +177,7 @@ export default function SoloQuizPage() {
                   )}
                   {qq.explanation && (
                     <p className="review-expl">
-                      <b>Why:</b> {qq.explanation}
+                      <b>Why:</b> <MathText text={qq.explanation} />
                     </p>
                   )}
                 </div>
@@ -206,9 +210,12 @@ export default function SoloQuizPage() {
               Question {current + 1} of {total}
             </div>
           </div>
-          <button className="btn btn-ghost btn-sm" onClick={leave}>
-            Leave
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <SoundToggle />
+            <button className="btn btn-ghost btn-sm" onClick={leave}>
+              Leave
+            </button>
+          </div>
         </div>
 
         <div className="solo-bar">
@@ -216,7 +223,7 @@ export default function SoloQuizPage() {
         </div>
 
         <div className="solo-card">
-          <p className="solo-q">{q.question}</p>
+          <p className="solo-q"><MathText text={q.question} /></p>
           <div className="solo-opts">
             {q.options.map((opt) => (
               <button
@@ -224,7 +231,7 @@ export default function SoloQuizPage() {
                 className={`solo-opt${selected === opt ? " selected" : ""}`}
                 onClick={() => choose(opt)}
               >
-                <span>{opt}</span>
+                <span><MathText text={opt} /></span>
                 {selected === opt && <span className="mark" style={{ color: "var(--cobalt)" }}>●</span>}
               </button>
             ))}

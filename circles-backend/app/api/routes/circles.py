@@ -35,7 +35,7 @@ async def create_circle(
         circle = await conn.fetchrow(
             """
             INSERT INTO circles (name, description, invite_code, owner_id)
-            VALUES ($1, $2, $3, $4) RETURNING *
+            VALUES ($1, $2, $3, $4) RETURNING *, 0 AS storage_bytes
             """,
             body.name, body.description, invite_code, current_user["id"],
         )
@@ -53,7 +53,12 @@ async def join_circle(
     pool = await get_pool()
     async with pool.acquire() as conn:
         circle = await conn.fetchrow(
-            "SELECT * FROM circles WHERE invite_code = $1", body.invite_code
+            """
+            SELECT *,
+                COALESCE((SELECT SUM(size_bytes) FROM notes WHERE circle_id = circles.id), 0) AS storage_bytes
+            FROM circles WHERE invite_code = $1
+            """,
+            body.invite_code,
         )
         if not circle:
             raise HTTPException(status_code=404, detail="Circle not found")
@@ -75,7 +80,10 @@ async def list_my_circles(current_user: dict = Depends(get_current_user)):
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT c.* FROM circles c
+            SELECT c.*,
+                COALESCE((SELECT SUM(size_bytes) FROM notes WHERE circle_id = c.id), 0) AS storage_bytes,
+                (SELECT COUNT(*) FROM circle_members WHERE circle_id = c.id) AS member_count
+            FROM circles c
             JOIN circle_members cm ON cm.circle_id = c.id
             WHERE cm.user_id = $1
             ORDER BY c.created_at DESC
@@ -91,7 +99,14 @@ async def get_circle(
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        circle = await conn.fetchrow("SELECT * FROM circles WHERE id = $1", circle_id)
+        circle = await conn.fetchrow(
+            """
+            SELECT *,
+                COALESCE((SELECT SUM(size_bytes) FROM notes WHERE circle_id = circles.id), 0) AS storage_bytes
+            FROM circles WHERE id = $1
+            """,
+            circle_id,
+        )
         if not circle:
             raise HTTPException(status_code=404, detail="Circle not found")
         member = await conn.fetchrow(

@@ -1,28 +1,47 @@
 import json
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from app.core.config import settings
 from app.core.firebase import get_current_user
 from app.core.rate_limit import limiter, identify_user, quiz_generation_limit
 from app.db.database import get_pool
+from app.services.authz import assert_member
 from app.services.quiz_generator import generate_quiz_questions
 
 router = APIRouter()
 
 
-async def _assert_member(conn, circle_id, user_id) -> None:
-    member = await conn.fetchrow(
-        "SELECT 1 FROM circle_members WHERE circle_id = $1 AND user_id = $2",
-        circle_id, user_id,
+async def _fetch_selected_notes(conn, circle_id: str, note_ids: list[str]) -> list[dict]:
+    rows = await conn.fetch(
+        """
+        SELECT id, filename, content FROM notes
+        WHERE circle_id = $1 AND id = ANY($2::uuid[]) AND status = 'ready'
+        """,
+        circle_id, note_ids,
     )
-    if not member:
-        raise HTTPException(status_code=403, detail="Not a member of this circle")
+    found_ids = {str(r["id"]) for r in rows}
+    missing = [nid for nid in note_ids if nid not in found_ids]
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Note(s) not found or not ready: {', '.join(missing)}",
+        )
+    total_chars = sum(len(r["content"] or "") for r in rows)
+    if total_chars > settings.GENERATION_CONTEXT_CHAR_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail="Selected notes are too large — remove some and try again",
+        )
+    return [dict(r) for r in rows]
 
 
 class GenerateQuizRequest(BaseModel):
     circle_id: str
     title: str
     num_questions: int = Field(default=5, ge=1, le=30)
-    topic: str = ""
+    note_ids: list[str] = Field(min_length=1)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
 
 @router.post("/generate")
 @limiter.limit(quiz_generation_limit)
@@ -33,12 +52,13 @@ async def generate_quiz(
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await _assert_member(conn, body.circle_id, current_user["id"])
+        await assert_member(conn, body.circle_id, current_user["id"])
+        notes = await _fetch_selected_notes(conn, body.circle_id, body.note_ids)
 
     questions = await generate_quiz_questions(
-        circle_id=body.circle_id,
-        topic=body.topic,
+        notes=notes,
         num_questions=body.num_questions,
+        difficulty=body.difficulty,
     )
 
     async with pool.acquire() as conn:
@@ -61,7 +81,7 @@ async def get_quiz(
         quiz = await conn.fetchrow("SELECT * FROM quizzes WHERE id = $1", quiz_id)
         if not quiz:
             raise HTTPException(status_code=404, detail="Quiz not found")
-        await _assert_member(conn, quiz["circle_id"], current_user["id"])
+        await assert_member(conn, quiz["circle_id"], current_user["id"])
     return dict(quiz)
 
 @router.get("/{circle_id}")
@@ -71,7 +91,7 @@ async def list_circle_quizzes(
 ):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await _assert_member(conn, circle_id, current_user["id"])
+        await assert_member(conn, circle_id, current_user["id"])
         quizzes = await conn.fetch(
             "SELECT * FROM quizzes WHERE circle_id = $1 ORDER BY created_at DESC",
             circle_id,
@@ -89,7 +109,7 @@ async def submit_quiz(
         quiz = await conn.fetchrow("SELECT * FROM quizzes WHERE id = $1", quiz_id)
         if not quiz:
             raise HTTPException(status_code=404, detail="Quiz not found")
-        await _assert_member(conn, quiz["circle_id"], current_user["id"])
+        await assert_member(conn, quiz["circle_id"], current_user["id"])
         questions = json.loads(quiz["questions"]) if isinstance(quiz["questions"], str) else quiz["questions"]
 
         if len(answers) > len(questions) or any(len(v) > 1000 for v in answers.values()):

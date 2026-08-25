@@ -35,7 +35,8 @@ class _AlwaysConn:
         return dict(self._row)
 
     async def fetch(self, *a):
-        return []
+        # Satisfies _fetch_selected_notes: looks like a single ready note.
+        return [{"id": "n1", "filename": "notes.txt", "content": "text"}]
 
 
 class _Acquire:
@@ -74,7 +75,7 @@ def _client(monkeypatch, user_holder) -> TestClient:
 def _generate(client: TestClient):
     return client.post(
         "/api/generate",
-        json={"circle_id": "c1", "title": "t", "num_questions": 1},
+        json={"circle_id": "c1", "title": "t", "num_questions": 1, "note_ids": ["n1"]},
     )
 
 

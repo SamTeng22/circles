@@ -4,8 +4,10 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { circlesApi, Circle } from "@/lib/api";
 import { Sidebar } from "@/components/Sidebar";
+import { PigLoader } from "@/components/PigLoader";
 import { MiniViz } from "@/components/MiniViz";
 import { circleColor, initials } from "@/lib/circleStyle";
+import { formatMB } from "@/lib/format";
 
 export default function DashboardPage() {
   const { user, loading } = useAuth();
@@ -74,11 +76,7 @@ export default function DashboardPage() {
   }
 
   if (loading || !user) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
-        Loading…
-      </div>
-    );
+    return <PigLoader />;
   }
 
   const firstName = (user.displayName || "there").split(" ")[0];
@@ -172,7 +170,7 @@ export default function DashboardPage() {
         ) : (
           <div className="grid">
             {filtered.map((c) => {
-              const memberCount = c.members?.length ?? 1;
+              const memberCount = c.member_count ?? c.members?.length ?? 1;
               return (
                 <div key={c.id} className="card ccard" onClick={() => router.push(`/circles/${c.id}`)}>
                   <div className="ccard-top">
@@ -194,6 +192,7 @@ export default function DashboardPage() {
                   )}
                   <div className="ccard-foot">
                     <span className="chip chip-line">code {c.invite_code}</span>
+                    <span className="chip chip-line">{formatMB(c.storage_bytes)}</span>
                   </div>
                 </div>
               );

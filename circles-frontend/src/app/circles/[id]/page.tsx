@@ -2,21 +2,56 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
-import { circlesApi, notesApi, quizApi, flashcardsApi, Circle, Note, Quiz, FlashcardDeck } from "@/lib/api";
+import { circlesApi, notesApi, quizApi, flashcardsApi, conflictsApi, Circle, Note, Quiz, FlashcardDeck, Conflict, Difficulty, GENERATION_CONTEXT_CHAR_LIMIT } from "@/lib/api";
 import { Sidebar } from "@/components/Sidebar";
+import { PigLoader } from "@/components/PigLoader";
+import { PigProcessing } from "@/components/PigProcessing";
 import { circleColor, initials } from "@/lib/circleStyle";
-import { timeAgo } from "@/lib/format";
+import { timeAgo, formatMB } from "@/lib/format";
 
 type Tab = "consensus" | "notes" | "quizzes" | "flashcards";
 
-// Fixed cluster positions for the decorative consensus lens (overlapping blobs).
-const LENS_POS = [
-  { x: 38, y: 34, r: 130 },
-  { x: 62, y: 36, r: 132 },
-  { x: 50, y: 60, r: 128 },
-  { x: 36, y: 58, r: 116 },
-  { x: 64, y: 58, r: 116 },
-];
+// Cluster positions for the consensus lens (overlapping blobs), one per member.
+// Members are spread evenly around the center; a member's distance from center
+// grows with how many conflicts they're involved in, on a fixed absolute scale
+// (not relative to the most-conflicted member shown) so a single conflict only
+// nudges two members apart instead of maxing out the separation whenever
+// everyone happens to share the same conflict count. Blobs sit close together
+// (heavy overlap) when there's little or no conflict. There's no signal yet
+// for "unrelated" notes (only contradictions are persisted), so an unrelated
+// pair currently looks the same as full agreement.
+const LENS_BASE_DIST = 12; // % distance from center with zero conflicts
+const LENS_MAX_PUSH = 20; // extra % distance at LENS_CONFLICT_CAP conflicts
+const LENS_CONFLICT_CAP = 5; // conflict count at which a member is fully pushed out
+const LENS_BLOB_SIZE = 128; // px
+
+type LensPos = { x: number; y: number; r: number };
+
+function computeLensLayout(memberIds: string[], conflicts: Conflict[]): LensPos[] {
+  const n = memberIds.length;
+  if (n === 0) return [];
+
+  const conflictCounts = new Map<string, number>();
+  for (const c of conflicts) {
+    conflictCounts.set(c.user_a_id, (conflictCounts.get(c.user_a_id) ?? 0) + 1);
+    conflictCounts.set(c.user_b_id, (conflictCounts.get(c.user_b_id) ?? 0) + 1);
+  }
+
+  return memberIds.map((id, i) => {
+    if (n === 1) return { x: 50, y: 46, r: LENS_BLOB_SIZE };
+    const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+    // Squared so a lone conflict barely registers but repeated conflicts still
+    // escalate to full separation by LENS_CONFLICT_CAP.
+    const linear = Math.min((conflictCounts.get(id) ?? 0) / LENS_CONFLICT_CAP, 1);
+    const score = linear * linear;
+    const dist = LENS_BASE_DIST + score * LENS_MAX_PUSH;
+    return {
+      x: 50 + dist * Math.cos(angle),
+      y: 46 + dist * Math.sin(angle),
+      r: LENS_BLOB_SIZE,
+    };
+  });
+}
 
 export default function CircleDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -28,6 +63,7 @@ export default function CircleDetailPage() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [quizzes, setQuizzes] = useState<Quiz[]>([]);
   const [decks, setDecks] = useState<FlashcardDeck[]>([]);
+  const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [tab, setTab] = useState<Tab>("notes");
@@ -42,8 +78,9 @@ export default function CircleDetailPage() {
   const [genMode, setGenMode] = useState<"quiz" | "flashcards">("quiz");
   const [showGen, setShowGen] = useState(false);
   const [genTitle, setGenTitle] = useState("");
-  const [genTopic, setGenTopic] = useState("");
+  const [genSelectedNoteIds, setGenSelectedNoteIds] = useState<string[]>([]);
   const [genNum, setGenNum] = useState(5);
+  const [genDifficulty, setGenDifficulty] = useState<Difficulty>("medium");
   const [genBusy, setGenBusy] = useState(false);
   const [genError, setGenError] = useState("");
 
@@ -70,14 +107,6 @@ export default function CircleDetailPage() {
   const [confirmDeleteCircle, setConfirmDeleteCircle] = useState(false);
   const [deletingCircle, setDeletingCircle] = useState(false);
 
-  // Viewing / editing a note's extracted text
-  const [viewNote, setViewNote] = useState<Note | null>(null);
-  const [viewLoading, setViewLoading] = useState(false);
-  const [viewError, setViewError] = useState("");
-  const [editing, setEditing] = useState(false);
-  const [editContent, setEditContent] = useState("");
-  const [savingContent, setSavingContent] = useState(false);
-
   useEffect(() => {
     if (!loading && !user) router.push("/login");
   }, [user, loading, router]);
@@ -93,14 +122,16 @@ export default function CircleDetailPage() {
       quizApi.list(id),
       flashcardsApi.list(id),
       circlesApi.list(),
+      conflictsApi.list(id),
     ])
-      .then(([c, n, q, d, all]) => {
+      .then(([c, n, q, d, all, conf]) => {
         if (cancelled) return;
         setCircle(c);
         setNotes(n);
         setQuizzes(q);
         setDecks(d);
         setAllCircles(all);
+        setConflicts(conf);
       })
       .catch((e: any) => {
         if (!cancelled) setLoadError(e.message || "Failed to load this circle.");
@@ -256,54 +287,6 @@ export default function CircleDetailPage() {
     }
   }
 
-  async function openNoteView(note: Note) {
-    setViewNote(note);
-    setEditing(false);
-    setViewError("");
-    setEditContent("");
-    setViewLoading(true);
-    try {
-      const full = await notesApi.detail(note.id);
-      setViewNote(full);
-      setEditContent(full.content ?? "");
-    } catch (e: any) {
-      setViewError(e.message || "Couldn't load this note's contents.");
-    } finally {
-      setViewLoading(false);
-    }
-  }
-
-  function closeNoteView() {
-    if (savingContent) return;
-    setViewNote(null);
-    setEditing(false);
-    setViewError("");
-    setEditContent("");
-  }
-
-  async function saveNoteContent() {
-    if (!viewNote || savingContent) return;
-    setSavingContent(true);
-    setViewError("");
-    try {
-      await notesApi.updateContent(id, viewNote.id, editContent);
-      // Content flips to "processing" while it re-embeds; reflect that locally.
-      setNotes((prev) =>
-        prev.map((x) =>
-          x.id === viewNote.id
-            ? { ...x, status: "processing", content: editContent, edited_at: new Date().toISOString() }
-            : x
-        )
-      );
-      setViewNote(null);
-      setEditing(false);
-    } catch (e: any) {
-      setViewError(e.message || "Failed to save changes.");
-    } finally {
-      setSavingContent(false);
-    }
-  }
-
   async function openNoteFile(noteId: string) {
     try {
       const { url } = await notesApi.fileUrl(noteId);
@@ -337,22 +320,42 @@ export default function CircleDetailPage() {
   function openGen(mode: "quiz" | "flashcards") {
     setGenMode(mode);
     setGenTitle("");
-    setGenTopic("");
+    setGenSelectedNoteIds([]);
     setGenNum(mode === "quiz" ? 5 : 10);
+    setGenDifficulty("medium");
     setGenError("");
     setShowGen(true);
   }
 
+  const readyNotes = useMemo(() => notes.filter((n) => n.status === "ready"), [notes]);
+  const genSelectedChars = useMemo(
+    () =>
+      genSelectedNoteIds.reduce((sum, nid) => {
+        const n = readyNotes.find((rn) => rn.id === nid);
+        return sum + (n?.content?.length ?? 0);
+      }, 0),
+    [genSelectedNoteIds, readyNotes]
+  );
+
+  function toggleGenNote(n: Note) {
+    setGenSelectedNoteIds((prev) => {
+      if (prev.includes(n.id)) return prev.filter((nid) => nid !== n.id);
+      const wouldBeChars = genSelectedChars + (n.content?.length ?? 0);
+      if (wouldBeChars > GENERATION_CONTEXT_CHAR_LIMIT) return prev;
+      return [...prev, n.id];
+    });
+  }
+
   async function handleGenerate() {
-    if (!genTitle.trim()) return;
+    if (!genTitle.trim() || genSelectedNoteIds.length === 0) return;
     setGenBusy(true);
     setGenError("");
     try {
       if (genMode === "quiz") {
-        const quiz = await quizApi.generate(id, genTitle.trim(), genTopic.trim() || undefined, genNum);
+        const quiz = await quizApi.generate(id, genTitle.trim(), genSelectedNoteIds, genNum, genDifficulty);
         setQuizzes([quiz, ...quizzes]);
       } else {
-        const deck = await flashcardsApi.generate(id, genTitle.trim(), genTopic.trim() || undefined, genNum);
+        const deck = await flashcardsApi.generate(id, genTitle.trim(), genSelectedNoteIds, genNum, genDifficulty);
         setDecks([deck, ...decks]);
       }
       setShowGen(false);
@@ -377,11 +380,7 @@ export default function CircleDetailPage() {
   }
 
   if (loading || !user || pageLoading) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
-        Loading…
-      </div>
-    );
+    return <PigLoader />;
   }
 
   if (loadError || !circle) {
@@ -438,7 +437,7 @@ export default function CircleDetailPage() {
                   {members.length > 5 && <span className="av more">+{members.length - 5}</span>}
                 </div>
                 <span className="sub" style={{ fontSize: 13 }}>
-                  {members.length} member{members.length === 1 ? "" : "s"}
+                  {members.length} member{members.length === 1 ? "" : "s"} · {formatMB(circle.storage_bytes)} used
                 </span>
               </div>
             </div>
@@ -481,26 +480,36 @@ export default function CircleDetailPage() {
           </button>
         </div>
 
-        {/* Consensus (placeholder) */}
+        {/* Consensus */}
         {tab === "consensus" && (
           <div className="consensus">
             <div>
               <div className="lens-wrap">
                 <div className="lens">
-                  {members.slice(0, 5).map((m, i) => {
-                    const pos = LENS_POS[i];
-                    return (
-                      <div
-                        key={m.id}
-                        className="blob"
-                        style={{ width: pos.r, height: pos.r, background: circleColor(m.id), left: `${pos.x}%`, top: `${pos.y}%` }}
-                      />
-                    );
-                  })}
+                  {(() => {
+                    const lensMembers = members.slice(0, 5);
+                    const lensLayout = computeLensLayout(lensMembers.map((m) => m.id), conflicts);
+                    return lensMembers.map((m, i) => {
+                      const pos = lensLayout[i];
+                      return (
+                        <div
+                          key={m.id}
+                          className="blob"
+                          style={{ width: pos.r, height: pos.r, background: circleColor(m.id), left: `${pos.x}%`, top: `${pos.y}%` }}
+                        />
+                      );
+                    });
+                  })()}
                   <div className="lens-core">
                     <div>
-                      <b>—</b>
-                      <span>not computed</span>
+                      <b>{notes.length === 0 ? "—" : conflicts.length}</b>
+                      <span>
+                        {notes.length === 0
+                          ? "no notes yet"
+                          : conflicts.length === 1
+                          ? "conflict found"
+                          : "conflicts found"}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -512,24 +521,37 @@ export default function CircleDetailPage() {
                   ))}
                 </div>
               </div>
-              <p className="sub" style={{ fontSize: 13, marginTop: 12, padding: "0 4px" }}>
-                Each circle is one member&apos;s notes. Where they overlap, the group agrees — that
-                dense centre would become your verified set.
-              </p>
             </div>
-            <div className="panel">
-              <div className="panel-h">
-                <h3>Disagreements &amp; gaps</h3>
-                <span className="chip chip-line">soon</span>
+            {conflicts.length === 0 ? (
+              <div className="panel">
+                <div className="panel-h">
+                  <h3>Disagreements &amp; gaps</h3>
+                  <span className="chip chip-jade">clear</span>
+                </div>
+                <div className="panel-b">
+                  <p>No disagreements found across the notes in this circle yet.</p>
+                </div>
               </div>
-              <div className="panel-b">
-                <p>
-                  The consensus engine isn&apos;t available yet. Once uploaded notes are compared,
-                  this is where agreements, conflicts (with the majority answer kept), and gaps
-                  nobody covered will appear.
-                </p>
-              </div>
-            </div>
+            ) : (
+              conflicts.map((c) => (
+                <div className="panel" key={c.id}>
+                  <div className="panel-h">
+                    <h3>
+                      {c.note_a_filename} vs {c.note_b_filename}
+                    </h3>
+                    <span className={`chip ${c.resolved ? "chip-jade" : "chip-flag"}`}>
+                      {c.resolved ? "resolved" : "unresolved"}
+                    </span>
+                  </div>
+                  <div className="panel-b">
+                    <p>{c.explanation}</p>
+                    <p className="sub" style={{ fontSize: 12, marginTop: 8 }}>
+                      {c.user_a_name} vs {c.user_b_name} · {timeAgo(c.created_at)}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         )}
 
@@ -555,19 +577,25 @@ export default function CircleDetailPage() {
               onDragLeave={() => setDragging(false)}
               onDrop={onDrop}
             >
-              <div className="dz-ico">📄</div>
-              <h3>Drop your notes to pool them</h3>
-              <p className="sub" style={{ fontSize: 13.5, margin: "0 0 16px" }}>
-                PDF, images, or text (.txt, .md). We extract the text and embed it for quiz
-                generation.
-              </p>
-              <button className="btn btn-dark btn-sm" onClick={() => fileRef.current?.click()} disabled={uploading}>
-                {uploading ? "Uploading…" : "Upload notes"}
-              </button>
-              {uploadError && (
-                <div className="auth-error" style={{ marginTop: 16 }}>
-                  {uploadError}
-                </div>
+              {uploading ? (
+                <PigLoader fullscreen={false} size={120} label="Uploading" />
+              ) : (
+                <>
+                  <div className="dz-ico">📄</div>
+                  <h3>Drop your notes to pool them</h3>
+                  <p className="sub" style={{ fontSize: 13.5, margin: "0 0 16px" }}>
+                    PDF, images, or text (.txt, .md). We extract the text and embed it for quiz
+                    generation.
+                  </p>
+                  <button className="btn btn-dark btn-sm" onClick={() => fileRef.current?.click()} disabled={uploading}>
+                    Upload notes
+                  </button>
+                  {uploadError && (
+                    <div className="auth-error" style={{ marginTop: 16 }}>
+                      {uploadError}
+                    </div>
+                  )}
+                </>
               )}
             </div>
 
@@ -603,7 +631,7 @@ export default function CircleDetailPage() {
                       style={{ marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between" }}
                     >
                       <span>
-                        {n.status === "processing" && <span className="chip chip-cobalt">processing…</span>}
+                        {n.status === "processing" && <PigProcessing />}
                         {n.status === "ready" && <span className="chip chip-jade">ready</span>}
                         {n.status === "failed" && (
                           <span className="chip chip-flag" title={n.error ?? "Extraction failed"}>
@@ -614,7 +642,7 @@ export default function CircleDetailPage() {
                       <span style={{ display: "flex", gap: 8 }}>
                         <button
                           className="btn btn-ghost btn-sm"
-                          onClick={() => openNoteView(n)}
+                          onClick={() => router.push(`/circles/${id}/notes/${n.id}`)}
                           disabled={n.status === "processing"}
                           title="See the text the system extracted from this note"
                         >
@@ -747,12 +775,66 @@ export default function CircleDetailPage() {
               />
             </div>
             <div className="field">
-              <input
-                className="tinp"
-                placeholder="Topic to focus on (optional)"
-                value={genTopic}
-                onChange={(e) => setGenTopic(e.target.value)}
-              />
+              <label>Notes to generate from</label>
+              {readyNotes.length === 0 ? (
+                <p className="sub" style={{ fontSize: 13, margin: "4px 0 0" }}>
+                  No notes ready to generate from yet — upload some first.
+                </p>
+              ) : (
+                <>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                      maxHeight: 220,
+                      overflowY: "auto",
+                      overflowX: "auto",
+                      border: "1px solid var(--line)",
+                      borderRadius: 12,
+                      padding: 6,
+                    }}
+                  >
+                    {readyNotes.map((n) => {
+                      const selected = genSelectedNoteIds.includes(n.id);
+                      const chars = n.content?.length ?? 0;
+                      const disabled = !selected && genSelectedChars + chars > GENERATION_CONTEXT_CHAR_LIMIT;
+                      return (
+                        <label
+                          key={n.id}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
+                            padding: "6px 8px 6px 4px",
+                            borderRadius: 8,
+                            width: "max-content",
+                            minWidth: "100%",
+                            whiteSpace: "nowrap",
+                            opacity: disabled ? 0.45 : 1,
+                            cursor: disabled ? "not-allowed" : "pointer",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            disabled={disabled}
+                            onChange={() => toggleGenNote(n)}
+                            style={{ flex: "none", width: 14, height: 14, margin: 0 }}
+                          />
+                          <span style={{ flex: "none", fontSize: 13.5 }}>{n.filename}</span>
+                          <span className="sub" style={{ fontSize: 11.5, flex: "none", marginLeft: 10 }}>
+                            {n.uploader_name} · {chars.toLocaleString()} chars
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <p className="sub" style={{ fontSize: 12, margin: "6px 0 0" }}>
+                    {genSelectedChars.toLocaleString()} / {GENERATION_CONTEXT_CHAR_LIMIT.toLocaleString()} characters selected
+                  </p>
+                </>
+              )}
             </div>
             <div className="field">
               <input
@@ -770,97 +852,33 @@ export default function CircleDetailPage() {
                 {genMode === "quiz" ? "Number of questions (1–20)" : "Number of cards (1–30)"}
               </p>
             </div>
+            <div className="field">
+              <label>Difficulty</label>
+              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                {(["easy", "medium", "hard"] as Difficulty[]).map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    className={`btn btn-sm ${genDifficulty === d ? "btn-primary" : "btn-ghost"}`}
+                    style={{ flex: 1, textTransform: "capitalize" }}
+                    onClick={() => setGenDifficulty(d)}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="modal-actions">
               <button className="btn btn-ghost btn-sm" onClick={() => setShowGen(false)} disabled={genBusy}>
                 Cancel
               </button>
-              <button className="btn btn-primary btn-sm" onClick={handleGenerate} disabled={genBusy || !genTitle.trim()}>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={handleGenerate}
+                disabled={genBusy || !genTitle.trim() || genSelectedNoteIds.length === 0}
+              >
                 {genBusy ? "Generating…" : "Generate"}
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* View / edit note contents modal */}
-      {viewNote && (
-        <div className="modal-overlay" onClick={closeNoteView}>
-          <div
-            className="modal"
-            style={{ maxWidth: 720, width: "min(720px, 92vw)" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 style={{ marginBottom: 2 }}>{viewNote.filename}</h3>
-            <p className="sub" style={{ fontSize: 12.5, margin: "0 0 12px" }}>
-              This is the text the system extracted and uses for quizzes — what the computer
-              knows about this note.
-            </p>
-
-            {viewError && <div className="auth-error" style={{ marginBottom: 12 }}>{viewError}</div>}
-
-            {viewLoading ? (
-              <p className="sub" style={{ fontSize: 13.5 }}>Loading contents…</p>
-            ) : editing ? (
-              <textarea
-                className="tinp"
-                style={{ width: "100%", minHeight: 320, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}
-                value={editContent}
-                onChange={(e) => setEditContent(e.target.value)}
-                disabled={savingContent}
-              />
-            ) : editContent.trim() ? (
-              <div
-                style={{
-                  maxHeight: 420,
-                  overflowY: "auto",
-                  whiteSpace: "pre-wrap",
-                  fontSize: 13.5,
-                  lineHeight: 1.55,
-                  padding: 14,
-                  borderRadius: 10,
-                  background: "var(--panel, #f6f6f8)",
-                  border: "1px solid rgba(0,0,0,0.08)",
-                }}
-              >
-                {editContent}
-              </div>
-            ) : (
-              <p className="sub" style={{ fontSize: 13.5 }}>
-                No extracted text yet
-                {viewNote.status === "failed" ? " — extraction failed for this file." : "."}
-              </p>
-            )}
-
-            <div className="modal-actions">
-              {editing ? (
-                <>
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => setEditing(false)}
-                    disabled={savingContent}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    className="btn btn-primary btn-sm"
-                    onClick={saveNoteContent}
-                    disabled={savingContent}
-                  >
-                    {savingContent ? "Saving…" : "Save & re-embed"}
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button className="btn btn-ghost btn-sm" onClick={closeNoteView}>
-                    Close
-                  </button>
-                  {canDelete(viewNote) && !viewLoading && (
-                    <button className="btn btn-primary btn-sm" onClick={() => setEditing(true)}>
-                      Edit text
-                    </button>
-                  )}
-                </>
-              )}
             </div>
           </div>
         </div>

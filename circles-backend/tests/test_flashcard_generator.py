@@ -1,8 +1,8 @@
 """Tests for the flashcard generator service.
 
-These pin the parsing contract: chunks are retrieved from the circle's notes,
-the model's JSON reply is parsed, and Gemini's markdown code-fence wrapping is
-stripped. Retrieval and the model are faked so no DB or network is needed.
+These pin the parsing contract: selected notes are joined into context, the
+model's JSON reply is parsed, and Gemini's markdown code-fence wrapping is
+stripped. The model is faked so no DB or network is needed.
 """
 import pytest
 
@@ -14,46 +14,94 @@ class FakeResponse:
         self.text = text
 
 
-def _patch(monkeypatch, *, chunks, raw):
-    """Fake retrieve_chunks -> chunks and model.generate_content -> raw text."""
-    async def _retrieve(circle_id, topic, k=10):
-        return chunks
-    monkeypatch.setattr(fg, "retrieve_chunks", _retrieve)
-
+def _patch(monkeypatch, *, raw):
     class FakeModel:
         def generate_content(self, prompt):
             return FakeResponse(raw)
     monkeypatch.setattr(fg, "model", FakeModel())
 
 
-async def test_returns_empty_when_no_chunks(monkeypatch):
+def _patch_capturing_prompt(monkeypatch, *, raw):
+    captured = {}
+    class FakeModel:
+        def generate_content(self, prompt):
+            captured["prompt"] = prompt
+            return FakeResponse(raw)
+    monkeypatch.setattr(fg, "model", FakeModel())
+    return captured
+
+
+async def test_returns_empty_when_no_notes(monkeypatch):
     # The model must not be called when there's nothing to build cards from.
     def _boom(prompt):
-        raise AssertionError("model should not be called without chunks")
-    _patch(monkeypatch, chunks=[], raw="")
+        raise AssertionError("model should not be called without notes")
+    _patch(monkeypatch, raw="")
     monkeypatch.setattr(fg.model, "generate_content", _boom)
 
-    assert await fg.generate_flashcards("circle-1", "", 5) == []
+    assert await fg.generate_flashcards([], 5) == []
 
 
 async def test_parses_plain_json(monkeypatch):
     raw = '[{"front": "What is X?", "back": "X is Y", "hint": ""}]'
-    _patch(monkeypatch, chunks=["some note text"], raw=raw)
+    _patch(monkeypatch, raw=raw)
 
-    cards = await fg.generate_flashcards("circle-1", "", 5)
+    cards = await fg.generate_flashcards(
+        [{"filename": "notes.txt", "content": "some note text"}], 5
+    )
 
-    assert cards == [{"front": "What is X?", "back": "X is Y", "hint": ""}]
+    assert cards == [{"front": "What is X?", "back": "X is Y", "hint": "", "language": "en"}]
+
+
+async def test_clamps_unrecognized_language_code(monkeypatch):
+    raw = '[{"front": "Q", "back": "A", "hint": "", "language": "french"}]'
+    _patch(monkeypatch, raw=raw)
+
+    cards = await fg.generate_flashcards(
+        [{"filename": "notes.txt", "content": "notes"}], 1
+    )
+
+    assert cards[0]["language"] == "en"
 
 
 async def test_strips_markdown_code_fence(monkeypatch):
     raw = '```json\n[{"front": "Q", "back": "A", "hint": "h"}]\n```'
-    _patch(monkeypatch, chunks=["ctx"], raw=raw)
+    _patch(monkeypatch, raw=raw)
 
-    cards = await fg.generate_flashcards("circle-1", "photosynthesis", 3)
+    cards = await fg.generate_flashcards(
+        [{"filename": "notes.txt", "content": "ctx"}], 3
+    )
 
     assert cards[0]["front"] == "Q"
     assert cards[0]["back"] == "A"
 
 
-def test_strip_code_fence_passes_through_bare_json():
-    assert fg._strip_code_fence('  [{"front":"a"}] ') == '[{"front":"a"}]'
+async def test_defaults_to_medium_difficulty(monkeypatch):
+    raw = '[{"front": "Q", "back": "A", "hint": ""}]'
+    captured = _patch_capturing_prompt(monkeypatch, raw=raw)
+
+    await fg.generate_flashcards([{"filename": "n.txt", "content": "c"}], 1)
+
+    assert "Difficulty: MEDIUM" in captured["prompt"]
+
+
+@pytest.mark.parametrize("difficulty,label", [("easy", "EASY"), ("hard", "HARD")])
+async def test_passes_difficulty_into_prompt(monkeypatch, difficulty, label):
+    raw = '[{"front": "Q", "back": "A", "hint": ""}]'
+    captured = _patch_capturing_prompt(monkeypatch, raw=raw)
+
+    await fg.generate_flashcards(
+        [{"filename": "n.txt", "content": "c"}], 1, difficulty=difficulty
+    )
+
+    assert f"Difficulty: {label}" in captured["prompt"]
+
+
+async def test_repairs_unescaped_latex_backslashes(monkeypatch):
+    raw = r'[{"front": "Derivative of $x^3$?", "back": "$\frac{d}{dx} x^3 = 3x^2$", "hint": ""}]'
+    _patch(monkeypatch, raw=raw)
+
+    cards = await fg.generate_flashcards(
+        [{"filename": "notes.txt", "content": "calc notes"}], 1
+    )
+
+    assert cards[0]["back"] == r"$\frac{d}{dx} x^3 = 3x^2$"
