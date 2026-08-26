@@ -348,6 +348,9 @@ footer { border-top: 1px solid var(--line); background: var(--surface); }
 .legal a { color: var(--ink-2); text-decoration: underline; }
 .auth-error { background: rgba(255,90,71,.08); border: 1px solid rgba(255,90,71,.25); border-radius: 12px; padding: 10px 14px; font-size: 13.5px; color: #c0392b; margin-bottom: 16px; }
 .auth-success { background: rgba(12,183,141,.08); border: 1px solid rgba(12,183,141,.25); border-radius: 12px; padding: 10px 14px; font-size: 13.5px; color: #08815f; margin-bottom: 16px; }
+/* Transient/expected failures (rate limits, quota) -- distinct from real errors so
+   users read "try again shortly" differently from "something's broken." */
+.auth-warn { background: rgba(245,165,36,.1); border: 1px solid rgba(245,165,36,.3); border-radius: 12px; padding: 10px 14px; font-size: 13.5px; color: #9a6510; margin-bottom: 16px; }
 
 /* Segmented role toggle */
 .seg { display: flex; background: var(--paper); border: 1px solid var(--line); border-radius: 14px; padding: 4px; margin-bottom: 22px; gap: 4px; }
@@ -544,7 +547,7 @@ footer { border-top: 1px solid var(--line); background: var(--surface); }
 
 /* Note / quiz cards */
 .app .note-card .eyebrow, .app .quiz-card .eyebrow { color: var(--ink-3); }
-.app .note-card h3, .app .quiz-card h3 { margin: 8px 0 4px; font-size: 16px; font-weight: 600; }
+.app .note-card h3, .app .quiz-card h3 { margin: 8px 0 4px; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
 .app .note-link { color: var(--cobalt); cursor: pointer; }
 .app .note-link:hover { text-decoration: underline; }
 .app .quiz-actions { display: flex; gap: 8px; margin-top: 14px; }
