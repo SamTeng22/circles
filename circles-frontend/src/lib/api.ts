@@ -84,6 +84,15 @@ export const GENERATION_CONTEXT_CHAR_LIMIT = 40_000;
 
 export type Difficulty = "easy" | "medium" | "hard";
 
+export interface QuestionTypeCounts {
+  multiple_choice: number;
+  true_false: number;
+  fill_in_blank: number;
+  matching: number;
+}
+
+export type QuizAnswerValue = string | Record<string, string>;
+
 export const quizApi = {
   list: (circleId: string) => api.get<Quiz[]>(`/api/quiz/${circleId}`),
   getById: (quizId: string) => api.get<Quiz>(`/api/quiz/detail/${quizId}`),
@@ -91,17 +100,17 @@ export const quizApi = {
     circleId: string,
     title: string,
     noteIds: string[],
-    num?: number,
+    questionTypes: QuestionTypeCounts,
     difficulty?: Difficulty
   ) =>
     api.post<Quiz>("/api/quiz/generate", {
       circle_id: circleId,
       title,
       note_ids: noteIds,
-      num_questions: num ?? 5,
+      question_types: questionTypes,
       difficulty: difficulty ?? "medium",
     }),
-  submit: (quizId: string, answers: Record<string, string>) =>
+  submit: (quizId: string, answers: Record<string, QuizAnswerValue>) =>
     api.post<{ score: number; total: number }>(`/api/quiz/${quizId}/submit`, answers),
 };
 
@@ -167,13 +176,47 @@ export interface Quiz {
   created_at: string;
 }
 
-export interface Question {
+export type QuestionType = "multiple_choice" | "true_false" | "fill_in_blank" | "matching";
+
+interface BaseQuestion {
   question: string;
-  options: string[];
-  correct_answer: string;
   bloom_level: string;
   explanation: string;
   language?: string;
+  question_type?: QuestionType; // absent => multiple_choice (pre-existing quizzes)
+}
+
+export interface MultipleChoiceQuestion extends BaseQuestion {
+  question_type?: "multiple_choice";
+  options: string[];
+  correct_answer: string;
+}
+
+export interface TrueFalseQuestion extends BaseQuestion {
+  question_type: "true_false";
+  options: string[]; // ["True", "False"]
+  correct_answer: string;
+}
+
+export interface FillInBlankQuestion extends BaseQuestion {
+  question_type: "fill_in_blank";
+  accepted_answers: string[];
+  correct_answer: string;
+}
+
+export interface MatchingQuestion extends BaseQuestion {
+  question_type: "matching";
+  pairs: { left: string; right: string }[];
+}
+
+export type Question =
+  | MultipleChoiceQuestion
+  | TrueFalseQuestion
+  | FillInBlankQuestion
+  | MatchingQuestion;
+
+export function getQuestionType(q: Question): QuestionType {
+  return q.question_type ?? "multiple_choice";
 }
 
 export function getQuestionLanguage(q: Question): string {
