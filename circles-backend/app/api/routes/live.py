@@ -7,12 +7,14 @@ import time
 from app.core.firebase import resolve_user_from_token
 from app.db.database import get_pool
 from app.services.authz import assert_member
+from app.services.grading import grade_question
 
 router = APIRouter()
 
 ALLOWED_TIME_LIMITS = {10, 20, 30, 60}
 DEFAULT_TIME_LIMIT = 20
 REST_DURATION = 15
+LIVE_ELIGIBLE_TYPES = {"multiple_choice", "true_false"}
 
 # Room state per quiz_id
 class RoomState:
@@ -57,6 +59,10 @@ async def _authorize(quiz_id: str, user_id: str) -> list:
     return json.loads(quiz["questions"]) if isinstance(quiz["questions"], str) else quiz["questions"]
 
 
+def _is_live_eligible(questions: list) -> bool:
+    return all((q.get("question_type") or "multiple_choice") in LIVE_ELIGIBLE_TYPES for q in questions)
+
+
 @router.websocket("/ws/{quiz_id}")
 async def live_quiz_ws(websocket: WebSocket, quiz_id: str):
     await websocket.accept()
@@ -78,6 +84,10 @@ async def live_quiz_ws(websocket: WebSocket, quiz_id: str):
         raw_questions = await _authorize(quiz_id, user_id)
     except HTTPException as e:
         await websocket.close(code=4403 if e.status_code == 403 else 4404)
+        return
+
+    if not _is_live_eligible(raw_questions):
+        await websocket.close(code=4422)
         return
 
     if quiz_id not in rooms:
@@ -180,7 +190,7 @@ async def live_quiz_ws(websocket: WebSocket, quiz_id: str):
                 correct = (
                     isinstance(question_index, int)
                     and 0 <= question_index < len(room.questions)
-                    and submitted_answer == room.questions[question_index].get("correct_answer")
+                    and grade_question(room.questions[question_index], submitted_answer)
                 )
                 elapsed = _elapsed_seconds(room)
                 if correct:
