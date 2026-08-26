@@ -16,6 +16,13 @@ class JoinCircleRequest(BaseModel):
 class UpdateCircleRequest(BaseModel):
     name: str
 
+# Excludes 0/O and 1/I so codes read back unambiguously.
+INVITE_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+INVITE_CODE_LENGTH = 6
+
+def _generate_invite_code() -> str:
+    return "".join(secrets.choice(INVITE_CODE_ALPHABET) for _ in range(INVITE_CODE_LENGTH))
+
 async def _assert_owner(conn, circle_id: str, user_id) -> dict:
     circle = await conn.fetchrow("SELECT * FROM circles WHERE id = $1", circle_id)
     if not circle:
@@ -30,7 +37,7 @@ async def create_circle(
     current_user: dict = Depends(get_current_user),
 ):
     pool = await get_pool()
-    invite_code = secrets.token_urlsafe(6).upper()
+    invite_code = _generate_invite_code()
     async with pool.acquire() as conn:
         circle = await conn.fetchrow(
             """
@@ -215,7 +222,7 @@ async def regenerate_invite(
     pool = await get_pool()
     async with pool.acquire() as conn:
         await _assert_owner(conn, circle_id, current_user["id"])
-        invite_code = secrets.token_urlsafe(6).upper()
+        invite_code = _generate_invite_code()
         circle = await conn.fetchrow(
             "UPDATE circles SET invite_code = $1 WHERE id = $2 RETURNING *",
             invite_code, circle_id,

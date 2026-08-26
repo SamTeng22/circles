@@ -31,6 +31,11 @@ export const signInWithEmail = (email: string, password: string) =>
 export const signUpWithEmail = async (email: string, password: string, displayName: string) => {
   const cred = await createUserWithEmailAndPassword(auth, email, password);
   await updateProfile(cred.user, { displayName });
+  // The ID token minted by createUserWithEmailAndPassword predates this
+  // profile update, so its `name` claim is empty. Force a refresh now so
+  // the very next backend call (which lazily creates our users row) sees
+  // the display name -- that row is only ever populated once.
+  await cred.user.getIdToken(true);
   return cred;
 };
 
