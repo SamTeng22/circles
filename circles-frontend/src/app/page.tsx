@@ -321,7 +321,7 @@ export default function LandingPage() {
             <div className="join-inline">
               <input
                 placeholder="Have a code?"
-                maxLength={7}
+                maxLength={6}
                 value={joinCode}
                 onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
               />

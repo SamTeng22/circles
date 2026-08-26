@@ -206,8 +206,8 @@ function SignupForm() {
                   </svg>
                   <input
                     type="text"
-                    placeholder="BIO·742"
-                    maxLength={7}
+                    placeholder="H8KQ2M"
+                    maxLength={6}
                     value={code}
                     onChange={(e) => setCode(e.target.value.toUpperCase())}
                     style={{ textTransform: "uppercase", letterSpacing: ".1em", fontFamily: "var(--font-mono), ui-monospace, monospace" }}
