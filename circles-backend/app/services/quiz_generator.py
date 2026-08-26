@@ -102,7 +102,7 @@ Example of a Chinese-sourced multiple choice question:
   "correct_answer": "A. 葡萄糖和氧气",
   "bloom_level": "remembering",
   "language": "zh",
-  "explanation": "光合作用利用阳光将二氧化碳和水转化为葡萄糖和氧气。"
+  "explanation": "Photosynthesis (光合作用) uses sunlight to convert carbon dioxide and water into glucose and oxygen."
 }
 
 Example of a math multiple choice question (note the doubled backslashes in the LaTeX):
@@ -197,9 +197,10 @@ Bloom's taxonomy levels available for the "bloom_level" field:
 
 Language rules:
 - Each note below is written in one of: English, Tagalog, or Chinese.
-- Write each question (question text, options/pairs/accepted answers, correct_answer, explanation) in the SAME language as the note it is drawn from. If a question draws on multiple notes in different languages, use the language of the note it primarily draws from.
-- Tag every question with a "language" field using EXACTLY one of these codes: "en" (English), "tl" (Tagalog/Filipino), "zh" (Chinese). Do not use any other code or a language name.
+- Write the question text, options/pairs/accepted answers, and correct_answer in the SAME language as the note it is drawn from. If a question draws on multiple notes in different languages, use the language of the note it primarily draws from.
+- Tag every question with a "language" field using EXACTLY one of these codes: "en" (English), "tl" (Tagalog/Filipino), "zh" (Chinese). Do not use any other code or a language name. This tag reflects the language of the question itself, not necessarily the explanation (see next rule).
 - It is fine and expected for different questions in the same output to use different languages if the source notes differ in language.
+- Explanation language: for "en" and "tl" questions, write "explanation" in that same language. For "zh" questions, write "explanation" primarily in ENGLISH — many students who get Chinese-sourced questions cannot read Chinese explanations. You may quote a key Chinese term followed by its English gloss in parentheses (e.g. "光合作用 (photosynthesis) converts..."), but the explanation as a whole must be readable by someone who only reads English.
 
 Math notation rules:
 - The study notes may contain mathematical notation written in LaTeX, delimited by $...$ (inline) or $$...$$ (block), e.g. $x^2 + 3x - 4 = 0$. Interpret this notation correctly when reasoning about the material.
