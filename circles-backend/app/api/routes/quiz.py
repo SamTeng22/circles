@@ -1,12 +1,13 @@
 import json
-from typing import Literal
+from typing import Literal, Union
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from app.core.config import settings
 from app.core.firebase import get_current_user
 from app.core.rate_limit import limiter, identify_user, quiz_generation_limit
 from app.db.database import get_pool
 from app.services.authz import assert_member
+from app.services.grading import grade_question
 from app.services.quiz_generator import generate_quiz_questions
 
 router = APIRouter()
@@ -36,12 +37,26 @@ async def _fetch_selected_notes(conn, circle_id: str, note_ids: list[str]) -> li
     return [dict(r) for r in rows]
 
 
+class QuestionTypeCounts(BaseModel):
+    multiple_choice: int = Field(default=0, ge=0, le=30)
+    true_false: int = Field(default=0, ge=0, le=30)
+    fill_in_blank: int = Field(default=0, ge=0, le=30)
+    matching: int = Field(default=0, ge=0, le=30)
+
+    @model_validator(mode="after")
+    def _check_total(self):
+        total = self.multiple_choice + self.true_false + self.fill_in_blank + self.matching
+        if not (1 <= total <= 30):
+            raise ValueError("Total question count must be between 1 and 30")
+        return self
+
+
 class GenerateQuizRequest(BaseModel):
     circle_id: str
     title: str
-    num_questions: int = Field(default=5, ge=1, le=30)
     note_ids: list[str] = Field(min_length=1)
     difficulty: Literal["easy", "medium", "hard"] = "medium"
+    question_types: QuestionTypeCounts
 
 @router.post("/generate")
 @limiter.limit(quiz_generation_limit)
@@ -57,7 +72,7 @@ async def generate_quiz(
 
     questions = await generate_quiz_questions(
         notes=notes,
-        num_questions=body.num_questions,
+        question_type_counts=body.question_types.model_dump(),
         difficulty=body.difficulty,
     )
 
@@ -98,10 +113,24 @@ async def list_circle_quizzes(
         )
     return [dict(q) for q in quizzes]
 
+AnswerValue = Union[str, dict[str, str]]
+
+
+def _valid_answer_value(v: AnswerValue) -> bool:
+    if isinstance(v, str):
+        return len(v) <= 1000
+    if isinstance(v, dict):
+        return len(v) <= 50 and all(
+            isinstance(k, str) and len(k) <= 500 and isinstance(val, str) and len(val) <= 500
+            for k, val in v.items()
+        )
+    return False
+
+
 @router.post("/{quiz_id}/submit")
 async def submit_quiz(
     quiz_id: str,
-    answers: dict[str, str],  # raw body: mapping of question index to selected answer
+    answers: dict[str, AnswerValue],  # raw body: mapping of question index to submitted answer
     current_user: dict = Depends(get_current_user),
 ):
     pool = await get_pool()
@@ -112,12 +141,12 @@ async def submit_quiz(
         await assert_member(conn, quiz["circle_id"], current_user["id"])
         questions = json.loads(quiz["questions"]) if isinstance(quiz["questions"], str) else quiz["questions"]
 
-        if len(answers) > len(questions) or any(len(v) > 1000 for v in answers.values()):
+        if len(answers) > len(questions) or any(not _valid_answer_value(v) for v in answers.values()):
             raise HTTPException(status_code=400, detail="Invalid answers payload")
 
         score = sum(
             1 for i, q in enumerate(questions)
-            if answers.get(str(i)) == q.get("correct_answer")
+            if grade_question(q, answers.get(str(i)))
         )
         result = await conn.fetchrow(
             """

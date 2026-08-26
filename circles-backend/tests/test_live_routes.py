@@ -214,6 +214,59 @@ def test_connection_rejected_for_non_circle_member(monkeypatch, fake_conn, fake_
     assert exc_info.value.code == 4403
 
 
+def test_connection_rejected_for_quiz_with_fill_in_blank_question(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool)
+    quiz_id = _quiz_id()
+    questions = EN_QUESTIONS + [
+        {"question_type": "fill_in_blank", "question": "The _____ is red.", "accepted_answers": ["sky"], "language": "en"}
+    ]
+    _queue_auth(fake_conn, questions=questions)
+
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(f"/api/live/ws/{quiz_id}?token=token-user-1") as ws:
+            ws.receive_json()
+    assert exc_info.value.code == 4422
+
+
+def test_connection_rejected_for_quiz_with_matching_question(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool)
+    quiz_id = _quiz_id()
+    questions = EN_QUESTIONS + [
+        {
+            "question_type": "matching",
+            "question": "Match them.",
+            "pairs": [{"left": "A", "right": "1"}],
+            "language": "en",
+        }
+    ]
+    _queue_auth(fake_conn, questions=questions)
+
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(f"/api/live/ws/{quiz_id}?token=token-user-1") as ws:
+            ws.receive_json()
+    assert exc_info.value.code == 4422
+
+
+def test_mixed_multiple_choice_and_true_false_quiz_connects_and_plays(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool)
+    quiz_id = _quiz_id()
+    questions = [
+        {"question_type": "multiple_choice", "question": "2+2?", "options": ["3", "4"], "correct_answer": "4", "language": "en"},
+        {"question_type": "true_false", "question": "Sky is blue.", "options": ["True", "False"], "correct_answer": "True", "language": "en"},
+    ]
+
+    with _ws(client, fake_conn, quiz_id, "user-1", questions=questions) as host:
+        _join(host)
+        host.receive_json()  # own join
+
+        host.send_json({"type": "start_quiz"})
+        host.receive_json()  # question_start
+
+        host.send_json({"type": "answer", "question_index": 1, "answer": "True"})
+        answer_msg = host.receive_json()
+        assert answer_msg["correct"] is True
+
+
 # --- answering / server-computed correctness --------------------------------
 
 def test_answer_updates_score_reflected_in_leaderboard(monkeypatch, fake_conn, fake_pool):

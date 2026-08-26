@@ -3,7 +3,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { getIdToken } from "@/lib/firebase";
-import { quizApi, Quiz, Question, getQuestionLanguage } from "@/lib/api";
+import {
+  quizApi,
+  Quiz,
+  Question,
+  MultipleChoiceQuestion,
+  TrueFalseQuestion,
+  getQuestionLanguage,
+} from "@/lib/api";
+
+// Live mode only ever serves multiple_choice/true_false questions -- the
+// backend refuses to start a live room for a quiz containing any other type
+// (see LIVE_ELIGIBLE_TYPES in app/api/routes/live.py), so it's safe to widen
+// the discriminated union to its options/correct_answer-bearing members here.
+type LiveQuestion = MultipleChoiceQuestion | TrueFalseQuestion;
 import { SoundToggle } from "@/components/SoundToggle";
 import { PigLoader } from "@/components/PigLoader";
 import { AnimalMascot } from "@/components/AnimalMascot";
@@ -62,6 +75,7 @@ export default function LiveQuizPage() {
   const [language, setLanguage] = useState<string | null>(null);
   const [myUserId, setMyUserId] = useState("");
   const [connectionError, setConnectionError] = useState(false);
+  const [ineligibleQuiz, setIneligibleQuiz] = useState(false);
   const [kicked, setKicked] = useState(false);
   const [pendingKick, setPendingKick] = useState<Participant | null>(null);
   const [pendingEndQuiz, setPendingEndQuiz] = useState(false);
@@ -96,7 +110,7 @@ export default function LiveQuizPage() {
     return quiz.questions.filter((q) => getQuestionLanguage(q) === target);
   }, [quiz, language]);
 
-  const currentQuestion = filteredQuestions[questionIndex];
+  const currentQuestion = filteredQuestions[questionIndex] as LiveQuestion | undefined;
   const totalQuestions = filteredQuestions.length;
 
   function countForLanguage(q: Quiz | null, lang: string | null): number {
@@ -135,8 +149,11 @@ export default function LiveQuizPage() {
         send({ type: "set_name", name: user?.displayName ?? "Student" });
       };
 
-      socket.onclose = () => {
-        if (!hasConnectedRef.current) setConnectionError(true);
+      socket.onclose = (e) => {
+        if (!hasConnectedRef.current) {
+          if (e.code === 4422) setIneligibleQuiz(true);
+          setConnectionError(true);
+        }
       };
     })();
 
@@ -386,9 +403,13 @@ export default function LiveQuizPage() {
       <div className="live">
         <div className="live-shell" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh" }}>
           <div className="live-card" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, maxWidth: 380, textAlign: "center" }}>
-            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: "var(--ink)" }}>Couldn't join this quiz</h2>
+            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: "var(--ink)" }}>
+              {ineligibleQuiz ? "This quiz can't be played live" : "Couldn't join this quiz"}
+            </h2>
             <p style={{ margin: 0, fontSize: 14, color: "var(--ink-3)" }}>
-              You may not have access to this quiz, or your session expired. Try refreshing the page.
+              {ineligibleQuiz
+                ? "Live mode only supports multiple choice and true/false questions. This quiz has a fill-in-the-blank or matching question, so it can only be taken solo."
+                : "You may not have access to this quiz, or your session expired. Try refreshing the page."}
             </p>
             <button
               className="btn btn-primary btn-sm"

@@ -1,5 +1,5 @@
 "use client";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import type { User } from "firebase/auth";
 import { Circle } from "@/lib/api";
 import { logout } from "@/lib/firebase";
@@ -7,27 +7,31 @@ import { BrandGlyphLight } from "@/components/BrandGlyph";
 import { PigBounce } from "@/components/PigBounce";
 import { circleColor, initials } from "@/lib/circleStyle";
 
-// Top-level nav. Only "Home" is wired today; the rest land on the dashboard
-// until their pages exist (circle detail, quizzes, flashcards, live quiz).
-const NAV = [
-  { key: "home", label: "Home", icon: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" },
-  { key: "circles", label: "Circles", icon: "M9 9a5 5 0 1 0 .001 0M15 15a5 5 0 1 0 .001 0" },
-  { key: "quizzes", label: "Quizzes", icon: "M9 9a3 3 0 1 1 4 2.8c-.8.4-1 1-1 2M12 17h.01" },
-  { key: "flashcards", label: "Flashcards", icon: "M3 6h18v13H3zM3 10h18" },
-  { key: "live", label: "Live quiz", icon: "M5 3l14 9-14 9z" },
+export type SidebarCircleTab = "quizzes" | "flashcards" | "live";
+
+// Circle-scoped nav — only meaningful once a circle is selected, so these
+// are hidden until then and route into that circle's matching tab.
+const CIRCLE_NAV = [
+  { key: "quizzes", label: "Quizzes", icon: "M9 9a3 3 0 1 1 4 2.8c-.8.4-1 1-1 2M12 17h.01", tab: "quizzes" },
+  { key: "flashcards", label: "Flashcards", icon: "M3 6h18v13H3zM3 10h18", tab: "flashcards" },
+  { key: "live", label: "Live quiz", icon: "M5 3l14 9-14 9z", tab: "quizzes" },
 ] as const;
 
 export function Sidebar({
   user,
   circles,
   activeCircleId,
+  activeTab,
 }: {
   user: User | null;
   circles: Circle[];
   activeCircleId?: string;
+  activeTab?: SidebarCircleTab;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const displayName = user?.displayName || user?.email?.split("@")[0] || "You";
+  const homeActive = pathname === "/dashboard";
 
   return (
     <aside className="side">
@@ -39,18 +43,26 @@ export function Sidebar({
       </div>
 
       <nav className="nav">
-        {NAV.map((item) => (
-          <button
-            key={item.key}
-            className={`nav-item${item.key === "home" ? " active" : ""}`}
-            onClick={() => router.push("/dashboard")}
-          >
-            <svg className="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d={item.icon} />
-            </svg>
-            {item.label}
-          </button>
-        ))}
+        <button className={`nav-item${homeActive ? " active" : ""}`} onClick={() => router.push("/dashboard")}>
+          <svg className="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z" />
+          </svg>
+          Home
+        </button>
+
+        {activeCircleId &&
+          CIRCLE_NAV.map((item) => (
+            <button
+              key={item.key}
+              className={`nav-item${activeTab === item.key ? " active" : ""}`}
+              onClick={() => router.push(`/circles/${activeCircleId}?tab=${item.tab}`)}
+            >
+              <svg className="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d={item.icon} />
+              </svg>
+              {item.label}
+            </button>
+          ))}
 
         {circles.length > 0 && <div className="nav-label">Your circles</div>}
         {circles.map((c) => (

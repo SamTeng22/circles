@@ -1,12 +1,97 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
-import { quizApi, Quiz } from "@/lib/api";
+import {
+  quizApi,
+  Quiz,
+  Question,
+  QuizAnswerValue,
+  MatchingQuestion,
+  getQuestionType,
+} from "@/lib/api";
+import { isAnswerCorrect } from "@/lib/grading";
 import { PigLoader } from "@/components/PigLoader";
 import { MathText } from "@/components/MathText";
 import { SoundToggle } from "@/components/SoundToggle";
 import { playSound } from "@/lib/sound";
+
+function shuffled<T>(items: T[]): T[] {
+  const arr = [...items];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function renderReview(qq: Question, your: QuizAnswerValue | undefined) {
+  const qtype = getQuestionType(qq);
+
+  if (qtype === "multiple_choice" || qtype === "true_false") {
+    const options = (qq as { options: string[] }).options;
+    const correctAnswer = (qq as { correct_answer: string }).correct_answer;
+    return (
+      <div className="solo-opts">
+        {options.map((opt) => {
+          const isCorrect = opt === correctAnswer;
+          const isYourWrong = opt === your && your !== correctAnswer;
+          return (
+            <div key={opt} className={`solo-opt${isCorrect ? " correct" : ""}${isYourWrong ? " wrong" : ""}`}>
+              <span><MathText text={opt} /></span>
+              {isCorrect && <span className="mark" style={{ color: "var(--jade)" }}>✓</span>}
+              {isYourWrong && <span className="mark" style={{ color: "var(--persimmon)" }}>your answer</span>}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  if (qtype === "fill_in_blank") {
+    const q = qq as { accepted_answers: string[]; correct_answer: string };
+    const yourText = typeof your === "string" ? your : "";
+    const correct = isAnswerCorrect(qq, your);
+    return (
+      <div className="solo-opts">
+        <div className={`solo-opt${yourText ? (correct ? " correct" : " wrong") : ""}`}>
+          <span>Your answer: {yourText || "(blank)"}</span>
+        </div>
+        {!correct && (
+          <div className="solo-opt correct">
+            <span>Correct answer: {q.accepted_answers?.[0] ?? q.correct_answer}</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (qtype === "matching") {
+    const q = qq as MatchingQuestion;
+    const yourMap = your && typeof your === "object" ? (your as Record<string, string>) : {};
+    return (
+      <div className="solo-match">
+        {q.pairs.map((pair) => {
+          const yourRight = yourMap[pair.left];
+          const rowCorrect = yourRight === pair.right;
+          return (
+            <div key={pair.left} className={`solo-match-row${rowCorrect ? " correct" : " wrong"}`}>
+              <span className="solo-match-left"><MathText text={pair.left} /></span>
+              <span className="solo-match-right">
+                <MathText text={yourRight ?? "(no match)"} />
+                {!rowCorrect && (
+                  <span className="solo-match-hint"> → <MathText text={pair.right} /></span>
+                )}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  return null;
+}
 
 export default function SoloQuizPage() {
   const { quizId } = useParams<{ quizId: string }>();
@@ -18,7 +103,7 @@ export default function SoloQuizPage() {
   const [loadError, setLoadError] = useState("");
 
   const [current, setCurrent] = useState(0);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [answers, setAnswers] = useState<Record<string, QuizAnswerValue>>({});
   const [phase, setPhase] = useState<"quiz" | "results">("quiz");
   const [submitting, setSubmitting] = useState(false);
   const [score, setScore] = useState<number | null>(null);
@@ -51,9 +136,28 @@ export default function SoloQuizPage() {
   const total = questions.length;
   const q = questions[current];
   const selected = answers[current];
+  const qType = q ? getQuestionType(q) : undefined;
 
-  function choose(option: string) {
+  const matchRights = useMemo(() => {
+    if (!q || getQuestionType(q) !== "matching") return [];
+    return shuffled((q as MatchingQuestion).pairs.map((p) => p.right));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quiz, current]);
+
+  function chooseOption(option: string) {
     setAnswers((prev) => ({ ...prev, [current]: option }));
+  }
+
+  function chooseFillIn(text: string) {
+    setAnswers((prev) => ({ ...prev, [current]: text }));
+  }
+
+  function chooseMatch(left: string, right: string) {
+    setAnswers((prev) => {
+      const existing = prev[current];
+      const map = existing && typeof existing === "object" ? (existing as Record<string, string>) : {};
+      return { ...prev, [current]: { ...map, [left]: right } };
+    });
   }
 
   async function finish() {
@@ -63,7 +167,7 @@ export default function SoloQuizPage() {
       setScore(res.score);
     } catch {
       // Fall back to a locally computed score if the submit call fails.
-      setScore(questions.filter((qq, i) => answers[i] === qq.correct_answer).length);
+      setScore(questions.filter((qq, i) => isAnswerCorrect(qq, answers[i])).length);
     } finally {
       setSubmitting(false);
       setPhase("results");
@@ -156,22 +260,7 @@ export default function SoloQuizPage() {
                   <p className="rq">
                     {i + 1}. <MathText text={qq.question} />
                   </p>
-                  <div className="solo-opts">
-                    {qq.options.map((opt) => {
-                      const isCorrect = opt === qq.correct_answer;
-                      const isYourWrong = opt === your && your !== qq.correct_answer;
-                      return (
-                        <div
-                          key={opt}
-                          className={`solo-opt${isCorrect ? " correct" : ""}${isYourWrong ? " wrong" : ""}`}
-                        >
-                          <span><MathText text={opt} /></span>
-                          {isCorrect && <span className="mark" style={{ color: "var(--jade)" }}>✓</span>}
-                          {isYourWrong && <span className="mark" style={{ color: "var(--persimmon)" }}>your answer</span>}
-                        </div>
-                      );
-                    })}
-                  </div>
+                  {renderReview(qq, your)}
                   {your === undefined && (
                     <p className="review-expl" style={{ color: "var(--ink-3)" }}>You skipped this question.</p>
                   )}
@@ -224,18 +313,55 @@ export default function SoloQuizPage() {
 
         <div className="solo-card">
           <p className="solo-q"><MathText text={q.question} /></p>
-          <div className="solo-opts">
-            {q.options.map((opt) => (
-              <button
-                key={opt}
-                className={`solo-opt${selected === opt ? " selected" : ""}`}
-                onClick={() => choose(opt)}
-              >
-                <span><MathText text={opt} /></span>
-                {selected === opt && <span className="mark" style={{ color: "var(--cobalt)" }}>●</span>}
-              </button>
-            ))}
-          </div>
+          {(qType === "multiple_choice" || qType === "true_false") && (
+            <div className="solo-opts">
+              {(q as { options: string[] }).options.map((opt) => (
+                <button
+                  key={opt}
+                  className={`solo-opt${selected === opt ? " selected" : ""}`}
+                  onClick={() => chooseOption(opt)}
+                >
+                  <span><MathText text={opt} /></span>
+                  {selected === opt && <span className="mark" style={{ color: "var(--cobalt)" }}>●</span>}
+                </button>
+              ))}
+            </div>
+          )}
+          {qType === "fill_in_blank" && (
+            <div className="solo-fillin">
+              <input
+                type="text"
+                placeholder="Type your answer…"
+                value={typeof selected === "string" ? selected : ""}
+                onChange={(e) => chooseFillIn(e.target.value)}
+              />
+            </div>
+          )}
+          {qType === "matching" && (
+            <div className="solo-match">
+              {(q as MatchingQuestion).pairs.map((pair) => {
+                const yourMap = selected && typeof selected === "object" ? (selected as Record<string, string>) : {};
+                return (
+                  <div key={pair.left} className="solo-match-row">
+                    <span className="solo-match-left"><MathText text={pair.left} /></span>
+                    <select
+                      value={yourMap[pair.left] ?? ""}
+                      onChange={(e) => chooseMatch(pair.left, e.target.value)}
+                    >
+                      <option value="" disabled>
+                        Choose a match…
+                      </option>
+                      {matchRights.map((right) => (
+                        <option key={right} value={right}>
+                          {right}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="solo-nav">
