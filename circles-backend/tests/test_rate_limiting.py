@@ -75,7 +75,12 @@ def _client(monkeypatch, user_holder) -> TestClient:
 def _generate(client: TestClient):
     return client.post(
         "/api/generate",
-        json={"circle_id": "c1", "title": "t", "num_questions": 1, "note_ids": ["n1"]},
+        json={
+            "circle_id": "c1",
+            "title": "t",
+            "note_ids": ["n1"],
+            "question_types": {"multiple_choice": 1, "true_false": 0, "fill_in_blank": 0, "matching": 0},
+        },
     )
 
 

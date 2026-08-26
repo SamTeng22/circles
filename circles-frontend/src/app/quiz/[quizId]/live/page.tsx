@@ -1,9 +1,27 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
-import { quizApi, Quiz, Question, getQuestionLanguage } from "@/lib/api";
+import { getIdToken } from "@/lib/firebase";
+import {
+  quizApi,
+  Quiz,
+  Question,
+  MultipleChoiceQuestion,
+  TrueFalseQuestion,
+  getQuestionLanguage,
+} from "@/lib/api";
+
+// Live mode only ever serves multiple_choice/true_false questions -- the
+// backend refuses to start a live room for a quiz containing any other type
+// (see LIVE_ELIGIBLE_TYPES in app/api/routes/live.py), so it's safe to widen
+// the discriminated union to its options/correct_answer-bearing members here.
+type LiveQuestion = MultipleChoiceQuestion | TrueFalseQuestion;
 import { SoundToggle } from "@/components/SoundToggle";
+import { PigLoader } from "@/components/PigLoader";
+import { AnimalMascot } from "@/components/AnimalMascot";
+import type { AnimalName } from "@/components/animalArt";
+import { MathText } from "@/components/MathText";
 import { playSound } from "@/lib/sound";
 
 const LANGUAGE_LABELS: Record<string, string> = {
@@ -12,15 +30,27 @@ const LANGUAGE_LABELS: Record<string, string> = {
   zh: "Chinese",
 };
 
+const TIME_LIMIT_OPTIONS = [10, 20, 30, 60];
+const DEFAULT_TIME_LIMIT = 20;
+const TIMEOUT_SENTINEL = "__TIMEOUT__";
+// One mascot per answer slot, so an option is identifiable by its animal as
+// well as its text. The pig stays the app's own mascot and isn't in the set.
+const TILE_ANIMALS: AnimalName[] = ["dog", "cat", "rabbit", "bear"];
+
 type Phase = "lobby" | "question" | "rest" | "finished";
 
 interface Participant { user_id: string; display_name: string; }
 interface LeaderboardEntry { user_id: string; display_name: string; score: number; }
 interface ChatMsg { user_id: string; display_name: string; text: string; }
 
+function initials(name: string): string {
+  return (name || "?")[0].toUpperCase();
+}
+
 export default function LiveQuizPage() {
   const { quizId } = useParams<{ quizId: string }>();
   const { user } = useAuth();
+  const router = useRouter();
 
   const [quiz, setQuiz] = useState<Quiz | null>(null);
   const [phase, setPhase] = useState<Phase>("lobby");
@@ -29,19 +59,44 @@ export default function LiveQuizPage() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [readyIds, setReadyIds] = useState<string[]>([]);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
-  const [answerResult, setAnswerResult] = useState<"correct" | "wrong" | null>(null);
+  const [answerResult, setAnswerResult] = useState<"correct" | "wrong" | "timeout" | null>(null);
+  const [earnedPoints, setEarnedPoints] = useState(0);
+  const [streak, setStreak] = useState(0);
   const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
   const [chatInput, setChatInput] = useState("");
+  const [chatOpen, setChatOpen] = useState(false);
+  const [unreadChat, setUnreadChat] = useState(false);
   const [countdown, setCountdown] = useState(15);
+  const [timeLimit, setTimeLimit] = useState(DEFAULT_TIME_LIMIT);
+  const [questionTimeLeft, setQuestionTimeLeft] = useState(DEFAULT_TIME_LIMIT);
+  const [pickedTimeLimit, setPickedTimeLimit] = useState(DEFAULT_TIME_LIMIT);
   const [hostId, setHostId] = useState<string | null>(null);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [language, setLanguage] = useState<string | null>(null);
+  const [myUserId, setMyUserId] = useState("");
+  const [connectionError, setConnectionError] = useState(false);
+  const [ineligibleQuiz, setIneligibleQuiz] = useState(false);
+  const [kicked, setKicked] = useState(false);
+  const [pendingKick, setPendingKick] = useState<Participant | null>(null);
+  const [pendingEndQuiz, setPendingEndQuiz] = useState(false);
 
   const ws = useRef<WebSocket | null>(null);
   const countdownRef = useRef<NodeJS.Timeout | null>(null);
+  const questionCountdownRef = useRef<NodeJS.Timeout | null>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
+  const hasConnectedRef = useRef(false);
+  // handleMessage is bound once to the socket's onmessage handler, so it
+  // closes over myUserId from that render (empty string, pre-connect) --
+  // this ref stays current for it to read instead, same trick as quizRef.
+  const myUserIdRef = useRef("");
+  const chatOpenRef = useRef(false);
 
-  const userId = user?.uid ?? "";
+  // Firebase uid only gates *whether* we attempt to connect; the server is
+  // the source of truth for our identity within the room (see the
+  // "connected" message below) since it resolves the token to its own
+  // internal users.id, which isn't necessarily the Firebase uid string.
+  const firebaseUid = user?.uid ?? "";
+  const userId = myUserId;
   const isHost = userId === hostId;
 
   const distinctLanguages = useMemo(
@@ -55,15 +110,8 @@ export default function LiveQuizPage() {
     return quiz.questions.filter((q) => getQuestionLanguage(q) === target);
   }, [quiz, language]);
 
-  const currentQuestion = filteredQuestions[questionIndex];
+  const currentQuestion = filteredQuestions[questionIndex] as LiveQuestion | undefined;
   const totalQuestions = filteredQuestions.length;
-
-  // Always-current refs so the WebSocket handler (wired up once, see below)
-  // never reasons from a stale closure over quiz/language.
-  const quizRef = useRef<Quiz | null>(null);
-  useEffect(() => {
-    quizRef.current = quiz;
-  }, [quiz]);
 
   function countForLanguage(q: Quiz | null, lang: string | null): number {
     if (!q || q.questions.length === 0) return 0;
@@ -78,28 +126,63 @@ export default function LiveQuizPage() {
 
   // Connect WebSocket
   useEffect(() => {
-    if (!userId) return;
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-    const wsUrl = apiUrl.replace(/^http/, "ws");
-    const socket = new WebSocket(`${wsUrl}/api/live/ws/${quizId}/${userId}`);
-    ws.current = socket;
+    if (!firebaseUid) return;
+    let cancelled = false;
+    let socket: WebSocket | null = null;
+    hasConnectedRef.current = false;
 
-    socket.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      handleMessage(msg);
+    (async () => {
+      const token = await getIdToken();
+      if (!token || cancelled) return;
+
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+      const wsUrl = apiUrl.replace(/^http/, "ws");
+      socket = new WebSocket(`${wsUrl}/api/live/ws/${quizId}?token=${encodeURIComponent(token)}`);
+      ws.current = socket;
+
+      socket.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        handleMessage(msg);
+      };
+
+      socket.onopen = () => {
+        send({ type: "set_name", name: user?.displayName ?? "Student" });
+      };
+
+      socket.onclose = (e) => {
+        if (!hasConnectedRef.current) {
+          if (e.code === 4422) setIneligibleQuiz(true);
+          setConnectionError(true);
+        }
+      };
+    })();
+
+    return () => {
+      cancelled = true;
+      socket?.close();
     };
-
-    socket.onopen = () => {
-      send({ type: "set_name", name: user?.displayName ?? "Student" });
-    };
-
-    return () => socket.close();
-  }, [userId]);
+  }, [firebaseUid]);
 
   // Scroll chat to bottom
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages]);
+
+  // Keep the ref in sync for handleMessage's closure, and clear the unread
+  // dot as soon as the drawer is opened.
+  useEffect(() => {
+    chatOpenRef.current = chatOpen;
+    if (chatOpen) setUnreadChat(false);
+  }, [chatOpen]);
+
+  // Tick sound for the last few seconds of a question -- questionTimeLeft
+  // only changes once per second (see startQuestionCountdown), so this
+  // fires exactly once per remaining second, not on every render.
+  useEffect(() => {
+    if (phase === "question" && questionTimeLeft > 0 && questionTimeLeft <= 3) {
+      playSound("tick");
+    }
+  }, [phase, questionTimeLeft]);
 
   function send(msg: object) {
     if (ws.current?.readyState === WebSocket.OPEN) {
@@ -109,6 +192,37 @@ export default function LiveQuizPage() {
 
   function handleMessage(msg: any) {
     switch (msg.type) {
+      case "connected":
+        hasConnectedRef.current = true;
+        myUserIdRef.current = msg.user_id;
+        setMyUserId(msg.user_id);
+        break;
+
+      case "sync_state": {
+        if (msg.phase) setPhase(msg.phase);
+        setQuestionIndex(msg.question_index ?? 0);
+        if (msg.language) setLanguage(msg.language);
+        setLeaderboard(msg.leaderboard ?? []);
+        setReadyIds(msg.ready ?? []);
+        if (msg.phase === "question") {
+          startQuestionCountdown(msg.time_limit ?? DEFAULT_TIME_LIMIT, msg.time_remaining ?? DEFAULT_TIME_LIMIT);
+          // Reconnected after already answering this question -- lock the
+          // options instead of showing an interactive-looking UI that would
+          // silently no-op (the server ignores a second answer).
+          if (msg.already_answered) {
+            setSelectedAnswer(msg.your_answer ?? TIMEOUT_SENTINEL);
+          }
+        } else if (msg.phase === "rest") {
+          setShowLeaderboard(true);
+          startCountdown(msg.rest_time_remaining ?? 15);
+        }
+        break;
+      }
+
+      case "kicked":
+        setKicked(true);
+        break;
+
       case "user_joined":
       case "user_left":
       case "name_updated":
@@ -120,24 +234,35 @@ export default function LiveQuizPage() {
 
       case "question_start": {
         if (msg.language) setLanguage(msg.language);
-        const total = countForLanguage(quizRef.current, msg.language ?? null);
-        const isFinished = msg.question_index >= total;
-        if (isFinished) playSound("complete");
-        setPhase(isFinished ? "finished" : "question");
+        setPhase("question");
         setQuestionIndex(msg.question_index);
         setSelectedAnswer(null);
         setAnswerResult(null);
+        setEarnedPoints(0);
         setReadyIds([]);
         setShowLeaderboard(false);
         if (msg.leaderboard) setLeaderboard(msg.leaderboard);
         stopCountdown();
+        startQuestionCountdown(msg.time_limit ?? DEFAULT_TIME_LIMIT);
+        playSound("start");
         break;
       }
 
+      case "quiz_finished":
+        playSound("complete");
+        setPhase("finished");
+        setLeaderboard(msg.leaderboard ?? []);
+        stopCountdown();
+        stopQuestionCountdown();
+        break;
+
       case "answer_received":
-        if (msg.user_id === userId) {
+        if (msg.user_id === myUserIdRef.current) {
           setAnswerResult(msg.correct ? "correct" : "wrong");
+          setEarnedPoints(msg.points ?? 0);
+          setStreak(msg.streak ?? 0);
           playSound(msg.correct ? "correct" : "wrong");
+          stopQuestionCountdown();
         }
         break;
 
@@ -145,6 +270,7 @@ export default function LiveQuizPage() {
         setPhase("rest");
         setLeaderboard(msg.leaderboard ?? []);
         setShowLeaderboard(true);
+        stopQuestionCountdown();
         startCountdown(15);
         break;
 
@@ -154,6 +280,7 @@ export default function LiveQuizPage() {
 
       case "chat_message":
         setChatMessages((prev) => [...prev, msg]);
+        if (msg.user_id !== myUserIdRef.current && !chatOpenRef.current) setUnreadChat(true);
         break;
     }
   }
@@ -173,15 +300,44 @@ export default function LiveQuizPage() {
     if (countdownRef.current) clearInterval(countdownRef.current);
   }
 
+  function startQuestionCountdown(limitSeconds: number, startAt: number = limitSeconds) {
+    setTimeLimit(limitSeconds);
+    setQuestionTimeLeft(startAt);
+    stopQuestionCountdown();
+    questionCountdownRef.current = setInterval(() => {
+      setQuestionTimeLeft((t) => {
+        if (t <= 1) { stopQuestionCountdown(); return 0; }
+        return t - 1;
+      });
+    }, 1000);
+  }
+
+  function stopQuestionCountdown() {
+    if (questionCountdownRef.current) clearInterval(questionCountdownRef.current);
+  }
+
+  // Time's up and nothing was picked -- lock the UI and let the server know
+  // so the streak resets like a normal wrong answer would.
+  useEffect(() => {
+    if (phase !== "question" || questionTimeLeft > 0 || selectedAnswer) return;
+    setSelectedAnswer(TIMEOUT_SENTINEL);
+    setAnswerResult("timeout");
+    send({
+      type: "answer",
+      question_index: questionIndex,
+      answer: null,
+    });
+  }, [questionTimeLeft, phase, selectedAnswer, questionIndex]);
+
   function submitAnswer(answer: string) {
     if (selectedAnswer || !currentQuestion) return;
     setSelectedAnswer(answer);
-    const correct = answer === currentQuestion.correct_answer;
+    // The server looks up the correct answer itself now -- we just report
+    // which option was picked.
     send({
       type: "answer",
       question_index: questionIndex,
       answer,
-      correct,
     });
   }
 
@@ -205,80 +361,217 @@ export default function LiveQuizPage() {
 
   function startQuiz(pickedLanguage?: string) {
     const lang = pickedLanguage ?? distinctLanguages[0] ?? "en";
-    send({ type: "start_quiz", language: lang });
+    send({ type: "start_quiz", language: lang, time_limit: pickedTimeLimit });
+  }
+
+  function confirmKick() {
+    if (!pendingKick) return;
+    send({ type: "kick_player", user_id: pendingKick.user_id });
+    setPendingKick(null);
+  }
+
+  function confirmEndQuiz() {
+    send({ type: "end_quiz" });
+    setPendingEndQuiz(false);
   }
 
   const isReady = readyIds.includes(userId);
 
+  // ── Kicked ─────────────────────────────────────────────────────────
+  if (kicked) {
+    return (
+      <div className="live">
+        <div className="live-shell" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh" }}>
+          <div className="live-card" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, maxWidth: 380, textAlign: "center" }}>
+            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: "var(--ink)" }}>You were removed from this game</h2>
+            <p style={{ margin: 0, fontSize: 14, color: "var(--ink-3)" }}>The host removed you from this session.</p>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => router.push(quiz ? `/circles/${quiz.circle_id}` : "/dashboard")}
+            >
+              Back to circle
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Connection failed ─────────────────────────────────────────────
+  if (connectionError) {
+    return (
+      <div className="live">
+        <div className="live-shell" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh" }}>
+          <div className="live-card" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, maxWidth: 380, textAlign: "center" }}>
+            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: "var(--ink)" }}>
+              {ineligibleQuiz ? "This quiz can't be played live" : "Couldn't join this quiz"}
+            </h2>
+            <p style={{ margin: 0, fontSize: 14, color: "var(--ink-3)" }}>
+              {ineligibleQuiz
+                ? "Live mode only supports multiple choice and true/false questions. This quiz has a fill-in-the-blank or matching question, so it can only be taken solo."
+                : "You may not have access to this quiz, or your session expired. Try refreshing the page."}
+            </p>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => router.push(quiz ? `/circles/${quiz.circle_id}` : "/dashboard")}
+            >
+              Back to circle
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Loading ────────────────────────────────────────────────────────
+  if (!quiz) {
+    return <PigLoader />;
+  }
+
   // ── Lobby ──────────────────────────────────────────────────────────
   if (phase === "lobby") {
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-6 px-4">
-        <h1 className="text-2xl font-semibold">{quiz?.title ?? "Loading..."}</h1>
-        <div className="bg-white border border-gray-100 rounded-2xl p-6 w-full max-w-sm">
-          <p className="text-sm text-gray-500 mb-3">Waiting for players ({participants.length})</p>
-          <div className="flex flex-col gap-2">
-            {participants.map((p) => (
-              <div key={p.user_id} className="flex items-center gap-2 text-sm">
-                <div className="w-7 h-7 rounded-full bg-purple-100 text-purple-700 flex items-center justify-center font-medium text-xs">
-                  {(p.display_name || "?")[0].toUpperCase()}
-                </div>
-                {p.display_name || "Joining..."}
-                {p.user_id === hostId && <span className="text-xs text-gray-400 ml-auto">host</span>}
-              </div>
-            ))}
+      <div className="live">
+        <div className="live-shell" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 24 }}>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+            <span className="live-badge"><span className="dot" />LIVE</span>
+            <h1 style={{ margin: 0, fontSize: 24, fontWeight: 600, textAlign: "center", color: "var(--ink)" }}>{quiz.title}</h1>
           </div>
-        </div>
-        {isHost && distinctLanguages.length > 1 && (
-          <div className="flex flex-col items-center gap-2">
-            <p className="text-sm text-gray-500">This quiz has multiple languages — play with:</p>
-            <div className="flex gap-2">
-              {distinctLanguages.map((code) => {
-                const count = countForLanguage(quiz, code);
-                return (
+          <div className="live-card" style={{ width: "100%", maxWidth: 380 }}>
+            <p style={{ margin: "0 0 12px", fontSize: 14, color: "var(--ink-3)" }}>Waiting for players ({participants.length})</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {participants.map((p) => (
+                <div key={p.user_id} className="live-player-row">
+                  <div className="live-av">{initials(p.display_name)}</div>
+                  {p.display_name || "Joining..."}
+                  {p.user_id === hostId && <span className="host-tag">host</span>}
+                  {isHost && p.user_id !== hostId && (
+                    <button
+                      onClick={() => setPendingKick(p)}
+                      className="btn btn-ghost btn-sm"
+                      style={{ marginLeft: "auto" }}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+          {isHost && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, width: "100%", maxWidth: 320 }}>
+              <p style={{ margin: 0, fontSize: 14, color: "var(--ink-3)" }}>Seconds per question</p>
+              <div className="seg" style={{ width: "100%" }}>
+                {TIME_LIMIT_OPTIONS.map((secs) => (
                   <button
-                    key={code}
-                    onClick={() => startQuiz(code)}
-                    disabled={participants.length < 1}
-                    className="px-5 py-3 bg-black text-white rounded-xl font-medium hover:bg-gray-800 disabled:opacity-40"
+                    key={secs}
+                    onClick={() => setPickedTimeLimit(secs)}
+                    className={pickedTimeLimit === secs ? "on" : ""}
                   >
-                    {LANGUAGE_LABELS[code] ?? code} ({count})
+                    {secs}s
                   </button>
-                );
-              })}
+                ))}
+              </div>
+            </div>
+          )}
+          {isHost && distinctLanguages.length > 1 && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+              <p style={{ margin: 0, fontSize: 14, color: "var(--ink-3)" }}>This quiz has multiple languages — play with:</p>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+                {distinctLanguages.map((code) => {
+                  const count = countForLanguage(quiz, code);
+                  return (
+                    <button
+                      key={code}
+                      onClick={() => startQuiz(code)}
+                      disabled={participants.length < 1}
+                      className="btn btn-primary btn-lg"
+                    >
+                      {LANGUAGE_LABELS[code] ?? code} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {isHost && distinctLanguages.length <= 1 && (
+            <button
+              onClick={() => startQuiz()}
+              disabled={participants.length < 1}
+              className="btn btn-primary btn-lg"
+            >
+              Start quiz
+            </button>
+          )}
+          {!isHost && <p style={{ margin: 0, fontSize: 14, color: "var(--ink-3)" }}>Waiting for host to start...</p>}
+        </div>
+
+        {pendingKick && (
+          <div className="live-modal-overlay" onClick={() => setPendingKick(null)}>
+            <div className="live-modal" onClick={(e) => e.stopPropagation()}>
+              <h3>Remove player?</h3>
+              <p>Remove {pendingKick.display_name || "this player"} from the game? They won't be able to rejoin this session.</p>
+              <div className="live-modal-actions">
+                <button className="btn btn-ghost btn-sm" onClick={() => setPendingKick(null)}>Cancel</button>
+                <button className="btn btn-primary btn-sm" onClick={confirmKick}>Remove</button>
+              </div>
             </div>
           </div>
         )}
-        {isHost && distinctLanguages.length <= 1 && (
-          <button
-            onClick={() => startQuiz()}
-            disabled={participants.length < 1}
-            className="px-6 py-3 bg-black text-white rounded-xl font-medium hover:bg-gray-800 disabled:opacity-40"
-          >
-            Start quiz
-          </button>
-        )}
-        {!isHost && <p className="text-sm text-gray-400">Waiting for host to start...</p>}
       </div>
     );
   }
 
   // ── Finished ───────────────────────────────────────────────────────
   if (phase === "finished") {
+    const top3 = leaderboard.slice(0, 3);
+    const showPodium = top3.length === 3;
+    const podiumOrder = showPodium ? [
+      { entry: top3[1], place: "second" as const },
+      { entry: top3[0], place: "first" as const },
+      { entry: top3[2], place: "third" as const },
+    ] : [];
+    const restEntries = showPodium ? leaderboard.slice(3) : leaderboard;
+
+    const rankClass = (rank: number) => (rank === 1 ? "gold" : rank === 2 ? "silver" : rank === 3 ? "bronze" : "");
+
     return (
-      <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-6 px-4">
-        <h2 className="text-2xl font-semibold">Final scores</h2>
-        <div className="w-full max-w-sm flex flex-col gap-2">
-          {leaderboard.map((entry, i) => (
-            <div
-              key={entry.user_id}
-              className={`flex items-center gap-3 bg-white border rounded-xl px-4 py-3 ${entry.user_id === userId ? "border-purple-300" : "border-gray-100"}`}
-            >
-              <span className="text-lg font-semibold w-6 text-gray-400">{i + 1}</span>
-              <span className="flex-1 text-sm font-medium">{entry.display_name || "Player"}</span>
-              <span className="text-sm font-semibold">{entry.score} pts</span>
+      <div className="live">
+        <div className="live-shell" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 24 }}>
+          <h2 style={{ margin: 0, fontSize: 24, fontWeight: 600, color: "var(--ink)" }}>Final scores</h2>
+
+          {showPodium && (
+            <div className="live-podium">
+              {podiumOrder.map(({ entry, place }) => (
+                <div key={entry.user_id} className={`live-podium-slot ${place}`}>
+                  <div className="live-podium-name">{entry.display_name || "Player"}</div>
+                  <div className="live-podium-block">
+                    {place === "first" ? "🥇" : place === "second" ? "🥈" : "🥉"}
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
+          )}
+
+          <div className="live-lb" style={{ width: "100%", maxWidth: 380 }}>
+            {restEntries.map((entry) => {
+              const rank = leaderboard.indexOf(entry) + 1;
+              return (
+                <div
+                  key={entry.user_id}
+                  className={`live-lb-row${entry.user_id === userId ? " me" : ""}`}
+                >
+                  <span className={`live-lb-rank ${rankClass(rank)}`}>{rank}</span>
+                  <span className="live-lb-name">{entry.display_name || "Player"}</span>
+                  <span className="live-lb-score">{entry.score} pts</span>
+                </div>
+              );
+            })}
+          </div>
+
+          <button className="btn btn-primary btn-sm" onClick={() => router.push(`/circles/${quiz.circle_id}`)}>
+            Back to circle
+          </button>
         </div>
       </div>
     );
@@ -286,73 +579,86 @@ export default function LiveQuizPage() {
 
   // ── Question + Rest ────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="live" style={{ minHeight: "100vh" }}>
       {/* Top bar */}
-      <div className="bg-white border-b px-4 py-3 flex items-center justify-between">
-        <span className="text-sm font-medium">{quiz?.title}</span>
-        <div className="flex items-center gap-3">
+      <div className="live-top">
+        <div className="live-top-title">
+          <span className="live-badge"><span className="dot" />LIVE</span>
+          <span>{quiz.title}</span>
+        </div>
+        <div className="live-top-actions">
+          {isHost && (
+            <button
+              onClick={() => setPendingEndQuiz(true)}
+              className="btn btn-ghost btn-sm"
+            >
+              End quiz
+            </button>
+          )}
           <SoundToggle />
-          <span className="text-sm text-gray-400">
+          <button
+            className="live-chat-toggle"
+            onClick={() => setChatOpen((v) => !v)}
+            aria-label="Toggle chat"
+          >
+            💬
+            {unreadChat && <span className="unread-dot" />}
+          </button>
+          <span className="live-progress">
             {questionIndex + 1} / {totalQuestions}
           </span>
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="live-body">
         {/* Main area */}
-        <div className="flex-1 flex flex-col p-4 gap-4 overflow-y-auto">
+        <div className="live-main">
 
           {/* Leaderboard overlay (rest phase) */}
           {phase === "rest" && showLeaderboard && (
-            <div className="bg-white border border-gray-100 rounded-2xl p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="font-semibold text-sm">Leaderboard</h3>
-                <div className="flex items-center gap-3">
-                  <span className="text-sm text-gray-400">
-                    Next in <span className="font-medium text-gray-700">{countdown}s</span>
+            <div className="live-card">
+              <div className="live-lb-header">
+                <h3 style={{ margin: 0, fontWeight: 600, fontSize: 14, color: "var(--ink)" }}>Leaderboard</h3>
+                <div className="live-lb-stats">
+                  <span style={{ fontSize: 14, color: "var(--ink-3)" }}>
+                    Next in <span style={{ fontWeight: 600, color: "var(--ink-2)" }}>{countdown}s</span>
                   </span>
-                  <span className="text-xs text-gray-400">
+                  <span style={{ fontSize: 12, color: "var(--ink-3)" }}>
                     {readyIds.length}/{participants.length} ready
                   </span>
                 </div>
               </div>
-              <div className="flex flex-col gap-2">
+              <div className="live-lb">
                 {leaderboard.map((entry, i) => {
-                  const medal = ["🥇", "🥈", "🥉"][i] ?? `${i + 1}.`;
+                  const medal = ["🥇", "🥈", "🥉"][i] ?? `${i + 1}`;
+                  const rankClass = i === 0 ? "gold" : i === 1 ? "silver" : i === 2 ? "bronze" : "";
                   return (
                     <div
                       key={entry.user_id}
-                      className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-all ${
-                        entry.user_id === userId
-                          ? "bg-purple-50 border border-purple-200"
-                          : "bg-gray-50"
-                      }`}
+                      className={`live-lb-row${entry.user_id === userId ? " me" : ""}`}
                     >
-                      <span className="w-6 text-center">{medal}</span>
-                      <span className="flex-1 font-medium">{entry.display_name || "Player"}</span>
-                      <span className="font-semibold">{entry.score} pts</span>
+                      <span className={`live-lb-rank ${rankClass}`}>{medal}</span>
+                      <span className="live-lb-name">{entry.display_name || "Player"}</span>
+                      <span className="live-lb-score">{entry.score} pts</span>
                     </div>
                   );
                 })}
               </div>
-              <div className="mt-4 flex gap-2">
+              <div className="live-lb-actions">
                 {!isReady && (
-                  <button
-                    onClick={markReady}
-                    className="flex-1 py-2 bg-black text-white rounded-lg text-sm font-medium hover:bg-gray-800"
-                  >
+                  <button onClick={markReady} className="btn btn-primary btn-sm" style={{ flex: 1 }}>
                     Ready ✓
                   </button>
                 )}
                 {isReady && (
-                  <div className="flex-1 py-2 bg-gray-100 text-gray-500 rounded-lg text-sm text-center">
+                  <div style={{ flex: 1, padding: "9px 0", borderRadius: 12, fontSize: 14, textAlign: "center", background: "var(--paper)", color: "var(--ink-3)" }}>
                     Waiting for others...
                   </div>
                 )}
                 {isHost && (
                   <button
                     onClick={() => send({ type: "force_next" })}
-                    className="px-4 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50"
+                    className="btn btn-ghost btn-sm"
                   >
                     Skip wait
                   </button>
@@ -363,46 +669,72 @@ export default function LiveQuizPage() {
 
           {/* Question card */}
           {phase === "question" && currentQuestion && (
-            <div className="bg-white border border-gray-100 rounded-2xl p-5 flex flex-col gap-4">
-              <div className="flex items-start justify-between gap-3">
-                <p className="font-medium text-base leading-snug flex-1">
-                  {currentQuestion.question}
+            <div className="live-card live-question-card">
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div className="solo-bar" style={{ marginBottom: 0 }}>
+                  <i style={{
+                    width: `${(questionTimeLeft / timeLimit) * 100}%`,
+                    background: questionTimeLeft <= 5 ? "var(--persimmon)" : "var(--ink)",
+                  }} />
+                </div>
+                <span style={{ alignSelf: "flex-end", fontSize: 12, color: "var(--ink-3)" }}>{questionTimeLeft}s</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+                <p style={{ margin: 0, fontWeight: 500, fontSize: 16, lineHeight: 1.4, flex: 1, color: "var(--ink)" }}>
+                  <MathText text={currentQuestion.question} />
                 </p>
-                <span className="text-xs px-2 py-1 rounded-full bg-purple-50 text-purple-700 shrink-0">
+                <span className="chip chip-cobalt" style={{ flexShrink: 0 }}>
                   {currentQuestion.bloom_level}
                 </span>
               </div>
-              <div className="grid grid-cols-1 gap-2">
-                {currentQuestion.options.map((opt) => {
-                  let style = "border-gray-200 hover:border-gray-400 hover:bg-gray-50";
+              <div className="live-tile-grid">
+                {currentQuestion.options.map((opt, i) => {
+                  const isCorrect = opt === currentQuestion.correct_answer;
+                  const isPicked = opt === selectedAnswer;
+                  const animal = TILE_ANIMALS[i % TILE_ANIMALS.length];
+                  let stateClass = "";
                   if (selectedAnswer) {
-                    if (opt === currentQuestion.correct_answer)
-                      style = "border-green-400 bg-green-50 text-green-800";
-                    else if (opt === selectedAnswer)
-                      style = "border-red-300 bg-red-50 text-red-700";
-                    else style = "border-gray-100 opacity-50";
+                    if (isCorrect) stateClass = "correct";
+                    else if (isPicked) stateClass = "wrong";
+                    else stateClass = "dim";
                   }
                   return (
                     <button
                       key={opt}
                       onClick={() => submitAnswer(opt)}
                       disabled={!!selectedAnswer}
-                      className={`text-left px-4 py-3 border rounded-xl text-sm transition ${style}`}
+                      className={`live-tile live-tile-${animal} ${stateClass}`}
                     >
-                      {opt}
+                      <span className="icon">
+                        <AnimalMascot animal={animal} size={30} bob={false} />
+                      </span>
+                      <span><MathText text={opt} /></span>
                     </button>
                   );
                 })}
               </div>
               {answerResult && (
-                <p className={`text-sm font-medium ${answerResult === "correct" ? "text-green-600" : "text-red-500"}`}>
-                  {answerResult === "correct" ? "Correct! +1 point" : `Wrong. Answer: ${currentQuestion.correct_answer}`}
+                <p
+                  key={answerResult}
+                  className="live-points-pop"
+                  style={{ margin: 0, fontSize: 14, fontWeight: 600, color: answerResult === "correct" ? "var(--jade)" : "var(--persimmon)" }}
+                >
+                  {answerResult === "correct" && (
+                    <>Correct! +{earnedPoints} pts{streak > 1 ? <span className="live-streak-flicker"> 🔥 x{streak}</span> : null}</>
+                  )}
+                  {answerResult === "wrong" && (
+                    <>Wrong. Answer: <MathText text={currentQuestion.correct_answer} /></>
+                  )}
+                  {answerResult === "timeout" && (
+                    <>Time's up! Answer: <MathText text={currentQuestion.correct_answer} /></>
+                  )}
                 </p>
               )}
               {isHost && (
                 <button
                   onClick={endQuestion}
-                  className="mt-1 self-end px-4 py-2 bg-black text-white rounded-lg text-sm hover:bg-gray-800"
+                  className="btn btn-dark btn-sm"
+                  style={{ alignSelf: "flex-end", marginTop: 4 }}
                 >
                   End question →
                 </button>
@@ -411,32 +743,28 @@ export default function LiveQuizPage() {
           )}
         </div>
 
-        {/* Chat sidebar */}
-        <div className="w-64 border-l bg-white flex flex-col shrink-0">
-          <div className="px-4 py-3 border-b text-sm font-medium text-gray-700">Chat</div>
-          <div className="flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-2">
+        {/* Chat backdrop (mobile only, shown while drawer is open) */}
+        {chatOpen && (
+          <div className="live-chat-backdrop" onClick={() => setChatOpen(false)} />
+        )}
+
+        {/* Chat sidebar / drawer */}
+        <div className={`live-chat${chatOpen ? " open" : ""}`}>
+          <div className="live-chat-head">Chat</div>
+          <div className="live-chat-body">
             {chatMessages.length === 0 && (
-              <p className="text-xs text-gray-400 text-center mt-4">No messages yet</p>
+              <p style={{ margin: "16px 0 0", fontSize: 12, textAlign: "center", color: "var(--ink-3)" }}>No messages yet</p>
             )}
             {chatMessages.map((msg, i) => (
-              <div key={i} className={`flex flex-col gap-0.5 ${msg.user_id === userId ? "items-end" : "items-start"}`}>
-                <span className="text-xs text-gray-400">{msg.display_name}</span>
-                <div
-                  className={`px-3 py-2 rounded-2xl text-sm max-w-full break-words ${
-                    msg.user_id === userId
-                      ? "bg-black text-white rounded-tr-sm"
-                      : "bg-gray-100 text-gray-800 rounded-tl-sm"
-                  }`}
-                >
-                  {msg.text}
-                </div>
+              <div key={i} className={`live-chat-msg${msg.user_id === userId ? " me" : ""}`}>
+                <span className="who">{msg.display_name}</span>
+                <div className="bubble">{msg.text}</div>
               </div>
             ))}
             <div ref={chatBottomRef} />
           </div>
-          <div className="p-3 border-t flex gap-2">
+          <div className="live-chat-foot">
             <input
-              className="flex-1 border rounded-lg px-3 py-2 text-sm"
               placeholder={phase === "rest" ? "Chat..." : "Rest phase only"}
               value={chatInput}
               disabled={phase !== "rest"}
@@ -446,13 +774,26 @@ export default function LiveQuizPage() {
             <button
               onClick={sendChat}
               disabled={phase !== "rest" || !chatInput.trim()}
-              className="px-3 py-2 bg-black text-white rounded-lg text-sm disabled:opacity-30"
+              className="btn btn-dark btn-sm"
             >
               ↑
             </button>
           </div>
         </div>
       </div>
+
+      {pendingEndQuiz && (
+        <div className="live-modal-overlay" onClick={() => setPendingEndQuiz(false)}>
+          <div className="live-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>End the quiz?</h3>
+            <p>This ends the game for everyone right now and jumps straight to final scores.</p>
+            <div className="live-modal-actions">
+              <button className="btn btn-ghost btn-sm" onClick={() => setPendingEndQuiz(false)}>Cancel</button>
+              <button className="btn btn-primary btn-sm" onClick={confirmEndQuiz}>End quiz</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

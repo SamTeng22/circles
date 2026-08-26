@@ -1,8 +1,8 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
-import { circlesApi, notesApi, quizApi, flashcardsApi, conflictsApi, Circle, Note, Quiz, FlashcardDeck, Conflict, Difficulty, GENERATION_CONTEXT_CHAR_LIMIT } from "@/lib/api";
+import { circlesApi, notesApi, quizApi, flashcardsApi, conflictsApi, Circle, Note, Quiz, FlashcardDeck, Conflict, Difficulty, GENERATION_CONTEXT_CHAR_LIMIT, QuestionTypeCounts, getQuestionType } from "@/lib/api";
 import { Sidebar } from "@/components/Sidebar";
 import { PigLoader } from "@/components/PigLoader";
 import { PigProcessing } from "@/components/PigProcessing";
@@ -53,10 +53,19 @@ function computeLensLayout(memberIds: string[], conflicts: Conflict[]): LensPos[
   });
 }
 
-export default function CircleDetailPage() {
+const VALID_TABS: Tab[] = ["consensus", "notes", "quizzes", "flashcards"];
+
+const LIVE_ELIGIBLE_TYPES = new Set(["multiple_choice", "true_false"]);
+
+function isLiveEligible(quiz: Quiz): boolean {
+  return quiz.questions.every((q) => LIVE_ELIGIBLE_TYPES.has(getQuestionType(q)));
+}
+
+function CircleDetailPageInner() {
   const { id } = useParams<{ id: string }>();
   const { user, loading } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [allCircles, setAllCircles] = useState<Circle[]>([]);
   const [circle, setCircle] = useState<Circle | null>(null);
@@ -66,7 +75,14 @@ export default function CircleDetailPage() {
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [tab, setTab] = useState<Tab>("notes");
+
+  // Tab lives in the URL (?tab=quizzes) so the sidebar can deep-link into a
+  // specific tab of the currently open circle.
+  const tabParam = searchParams.get("tab");
+  const tab: Tab = (VALID_TABS as string[]).includes(tabParam ?? "") ? (tabParam as Tab) : "notes";
+  function setTab(t: Tab) {
+    router.replace(`/circles/${id}?tab=${t}`, { scroll: false });
+  }
 
   // Notes upload
   const fileRef = useRef<HTMLInputElement>(null);
@@ -80,6 +96,12 @@ export default function CircleDetailPage() {
   const [genTitle, setGenTitle] = useState("");
   const [genSelectedNoteIds, setGenSelectedNoteIds] = useState<string[]>([]);
   const [genNum, setGenNum] = useState(5);
+  const [genQuestionCounts, setGenQuestionCounts] = useState<QuestionTypeCounts>({
+    multiple_choice: 5,
+    true_false: 0,
+    fill_in_blank: 0,
+    matching: 0,
+  });
   const [genDifficulty, setGenDifficulty] = useState<Difficulty>("medium");
   const [genBusy, setGenBusy] = useState(false);
   const [genError, setGenError] = useState("");
@@ -322,9 +344,24 @@ export default function CircleDetailPage() {
     setGenTitle("");
     setGenSelectedNoteIds([]);
     setGenNum(mode === "quiz" ? 5 : 10);
+    setGenQuestionCounts({ multiple_choice: 5, true_false: 0, fill_in_blank: 0, matching: 0 });
     setGenDifficulty("medium");
     setGenError("");
     setShowGen(true);
+  }
+
+  const genQuestionTotal =
+    genQuestionCounts.multiple_choice +
+    genQuestionCounts.true_false +
+    genQuestionCounts.fill_in_blank +
+    genQuestionCounts.matching;
+
+  function setGenQuestionCount(type: keyof QuestionTypeCounts, count: number) {
+    setGenQuestionCounts((prev) => ({ ...prev, [type]: Math.max(0, count) }));
+  }
+
+  function toggleGenQuestionType(type: keyof QuestionTypeCounts, enabled: boolean) {
+    setGenQuestionCounts((prev) => ({ ...prev, [type]: enabled ? Math.max(1, prev[type]) : 0 }));
   }
 
   const readyNotes = useMemo(() => notes.filter((n) => n.status === "ready"), [notes]);
@@ -348,11 +385,12 @@ export default function CircleDetailPage() {
 
   async function handleGenerate() {
     if (!genTitle.trim() || genSelectedNoteIds.length === 0) return;
+    if (genMode === "quiz" && (genQuestionTotal < 1 || genQuestionTotal > 20)) return;
     setGenBusy(true);
     setGenError("");
     try {
       if (genMode === "quiz") {
-        const quiz = await quizApi.generate(id, genTitle.trim(), genSelectedNoteIds, genNum, genDifficulty);
+        const quiz = await quizApi.generate(id, genTitle.trim(), genSelectedNoteIds, genQuestionCounts, genDifficulty);
         setQuizzes([quiz, ...quizzes]);
       } else {
         const deck = await flashcardsApi.generate(id, genTitle.trim(), genSelectedNoteIds, genNum, genDifficulty);
@@ -375,7 +413,8 @@ export default function CircleDetailPage() {
   }
 
   function startLiveQuiz() {
-    if (quizzes.length > 0) router.push(`/quiz/${quizzes[0].id}/live`);
+    const eligible = quizzes.find(isLiveEligible);
+    if (eligible) router.push(`/quiz/${eligible.id}/live`);
     else setTab("quizzes");
   }
 
@@ -404,7 +443,12 @@ export default function CircleDetailPage() {
 
   return (
     <div className="app">
-      <Sidebar user={user} circles={allCircles} activeCircleId={id} />
+      <Sidebar
+        user={user}
+        circles={allCircles}
+        activeCircleId={id}
+        activeTab={tab === "quizzes" || tab === "flashcards" ? tab : undefined}
+      />
 
       <main className="main">
         <div className="topbar">
@@ -686,31 +730,36 @@ export default function CircleDetailPage() {
               </div>
             ) : (
               <div className="grid">
-                {quizzes.map((q) => (
-                  <div key={q.id} className="card quiz-card">
-                    <span className="eyebrow">Generated · ready</span>
-                    <h3>{q.title}</h3>
-                    <p className="sub" style={{ fontSize: 13.5 }}>
-                      {q.questions.length} question{q.questions.length === 1 ? "" : "s"}
-                    </p>
-                    <div className="quiz-actions">
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        style={{ flex: 1 }}
-                        onClick={() => router.push(`/quiz/${q.id}/solo`)}
-                      >
-                        Solo practice
-                      </button>
-                      <button
-                        className="btn btn-primary btn-sm"
-                        style={{ flex: 1 }}
-                        onClick={() => router.push(`/quiz/${q.id}/live`)}
-                      >
-                        Run live
-                      </button>
+                {quizzes.map((q) => {
+                  const liveEligible = isLiveEligible(q);
+                  return (
+                    <div key={q.id} className="card quiz-card">
+                      <span className="eyebrow">Generated · ready</span>
+                      <h3>{q.title}</h3>
+                      <p className="sub" style={{ fontSize: 13.5 }}>
+                        {q.questions.length} question{q.questions.length === 1 ? "" : "s"}
+                      </p>
+                      <div className="quiz-actions">
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          style={{ flex: 1 }}
+                          onClick={() => router.push(`/quiz/${q.id}/solo`)}
+                        >
+                          Solo practice
+                        </button>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          style={{ flex: 1 }}
+                          disabled={!liveEligible}
+                          title={liveEligible ? undefined : "Live mode only supports multiple choice and true/false questions"}
+                          onClick={() => router.push(`/quiz/${q.id}/live`)}
+                        >
+                          Run live
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -836,22 +885,69 @@ export default function CircleDetailPage() {
                 </>
               )}
             </div>
-            <div className="field">
-              <input
-                className="tinp"
-                type="number"
-                min={1}
-                max={genMode === "quiz" ? 20 : 30}
-                value={genNum}
-                onChange={(e) => {
-                  const max = genMode === "quiz" ? 20 : 30;
-                  setGenNum(Math.max(1, Math.min(max, Number(e.target.value) || 1)));
-                }}
-              />
-              <p className="sub" style={{ fontSize: 12, margin: "6px 0 0" }}>
-                {genMode === "quiz" ? "Number of questions (1–20)" : "Number of cards (1–30)"}
-              </p>
-            </div>
+            {genMode === "quiz" ? (
+              <div className="field">
+                <label>Question types</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6 }}>
+                  {(
+                    [
+                      ["multiple_choice", "Multiple choice"],
+                      ["true_false", "True / false"],
+                      ["fill_in_blank", "Fill in the blank"],
+                      ["matching", "Matching"],
+                    ] as [keyof QuestionTypeCounts, string][]
+                  ).map(([type, label]) => {
+                    const enabled = genQuestionCounts[type] > 0;
+                    return (
+                      <div key={type} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <label className="check" style={{ flex: 1 }}>
+                          <input
+                            type="checkbox"
+                            checked={enabled}
+                            onChange={(e) => toggleGenQuestionType(type, e.target.checked)}
+                          />
+                          {label}
+                        </label>
+                        <input
+                          className="tinp"
+                          type="number"
+                          min={0}
+                          max={20}
+                          disabled={!enabled}
+                          value={genQuestionCounts[type]}
+                          onChange={(e) => setGenQuestionCount(type, Number(e.target.value) || 0)}
+                          style={{ width: 64 }}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+                <p
+                  className="sub"
+                  style={{
+                    fontSize: 12,
+                    margin: "6px 0 0",
+                    color: genQuestionTotal < 1 || genQuestionTotal > 20 ? "var(--persimmon)" : undefined,
+                  }}
+                >
+                  {genQuestionTotal} question{genQuestionTotal === 1 ? "" : "s"} total (1–20)
+                </p>
+              </div>
+            ) : (
+              <div className="field">
+                <input
+                  className="tinp"
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={genNum}
+                  onChange={(e) => setGenNum(Math.max(1, Math.min(30, Number(e.target.value) || 1)))}
+                />
+                <p className="sub" style={{ fontSize: 12, margin: "6px 0 0" }}>
+                  Number of cards (1–30)
+                </p>
+              </div>
+            )}
             <div className="field">
               <label>Difficulty</label>
               <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
@@ -875,7 +971,12 @@ export default function CircleDetailPage() {
               <button
                 className="btn btn-primary btn-sm"
                 onClick={handleGenerate}
-                disabled={genBusy || !genTitle.trim() || genSelectedNoteIds.length === 0}
+                disabled={
+                  genBusy ||
+                  !genTitle.trim() ||
+                  genSelectedNoteIds.length === 0 ||
+                  (genMode === "quiz" && (genQuestionTotal < 1 || genQuestionTotal > 20))
+                }
               >
                 {genBusy ? "Generating…" : "Generate"}
               </button>
@@ -1184,5 +1285,13 @@ export default function CircleDetailPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function CircleDetailPage() {
+  return (
+    <Suspense>
+      <CircleDetailPageInner />
+    </Suspense>
   );
 }

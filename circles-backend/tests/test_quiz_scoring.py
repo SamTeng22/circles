@@ -68,6 +68,65 @@ def test_submit_quiz_resubmission_inserts_a_new_row_each_time(monkeypatch, fake_
     assert inserts[1][1][2] == 0  # second submission: wrong
 
 
+def test_submit_quiz_scores_mixed_question_types(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool)
+    questions = [
+        {"question_type": "multiple_choice", "correct_answer": "A. x"},
+        {"question_type": "true_false", "correct_answer": "True"},
+        {"question_type": "fill_in_blank", "accepted_answers": ["photosynthesis"]},
+        {
+            "question_type": "matching",
+            "pairs": [
+                {"left": "Mitochondria", "right": "Produces energy"},
+                {"left": "Nucleus", "right": "Stores DNA"},
+            ],
+        },
+    ]
+    _queue_submit(fake_conn, questions=questions)
+
+    res = client.post(
+        "/api/q1/submit",
+        json={
+            "0": "A. x",
+            "1": "False",  # wrong
+            "2": "  Photosynthesis  ",  # correct, case/whitespace-insensitive
+            "3": {"Mitochondria": "Produces energy", "Nucleus": "Stores DNA"},
+        },
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["score"] == 3
+    assert body["total"] == 4
+
+
+def test_submit_quiz_rejects_oversized_matching_answer(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool)
+    questions = [{"question_type": "matching", "pairs": [{"left": "A", "right": "1"}]}]
+    _queue_submit(fake_conn, questions=questions)
+
+    oversized = {f"key-{i}": "v" for i in range(51)}  # over the 50-entry cap
+    res = client.post("/api/q1/submit", json={"0": oversized})
+
+    assert res.status_code == 400
+
+
+def test_submit_quiz_accepts_valid_matching_answer_shape(monkeypatch, fake_conn, fake_pool):
+    client = _client(monkeypatch, fake_pool)
+    questions = [
+        {
+            "question_type": "matching",
+            "pairs": [{"left": "Mitochondria", "right": "Produces energy"}],
+        }
+    ]
+    _queue_submit(fake_conn, questions=questions)
+
+    res = client.post("/api/q1/submit", json={"0": {"Mitochondria": "Produces energy"}})
+
+    assert res.status_code == 200
+    assert res.json()["score"] == 1
+
+
 def test_submit_quiz_scopes_score_to_submitting_user(monkeypatch, fake_conn, fake_pool):
     questions = [{"correct_answer": "A"}]
 
