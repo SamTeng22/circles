@@ -8,6 +8,7 @@ from app.db.database import get_pool
 from app.services.embedding import chunk_and_embed
 from app.services.conflict_detector import detect_conflicts_for_note
 from app.services import storage, extract
+from app.core.gemini_errors import friendly_gemini_error
 
 router = APIRouter()
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB
@@ -147,7 +148,7 @@ async def _process_note(
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE notes SET status = 'failed', error = $1 WHERE id = $2",
-                str(e)[:500], note_id,
+                friendly_gemini_error(e)[:500], note_id,
             )
         print(f"Note processing failed for {note_id}: {e}")
         return
@@ -221,7 +222,7 @@ async def _reembed_note(note_id: str, circle_id: str, user_id: str, content: str
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE notes SET status = 'failed', error = $1 WHERE id = $2",
-                str(e)[:500], note_id,
+                friendly_gemini_error(e)[:500], note_id,
             )
         print(f"Note re-embedding failed for {note_id}: {e}")
         return

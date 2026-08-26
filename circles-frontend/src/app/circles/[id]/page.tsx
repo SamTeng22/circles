@@ -8,6 +8,7 @@ import { PigLoader } from "@/components/PigLoader";
 import { PigProcessing } from "@/components/PigProcessing";
 import { circleColor, initials } from "@/lib/circleStyle";
 import { timeAgo, formatMB } from "@/lib/format";
+import { isThrottleMessage } from "@/lib/errors";
 
 type Tab = "consensus" | "notes" | "quizzes" | "flashcards";
 
@@ -635,7 +636,7 @@ function CircleDetailPageInner() {
                     Upload notes
                   </button>
                   {uploadError && (
-                    <div className="auth-error" style={{ marginTop: 16 }}>
+                    <div className={isThrottleMessage(uploadError) ? "auth-warn" : "auth-error"} style={{ marginTop: 16 }}>
                       {uploadError}
                     </div>
                   )}
@@ -678,9 +679,7 @@ function CircleDetailPageInner() {
                         {n.status === "processing" && <PigProcessing />}
                         {n.status === "ready" && <span className="chip chip-jade">ready</span>}
                         {n.status === "failed" && (
-                          <span className="chip chip-flag" title={n.error ?? "Extraction failed"}>
-                            failed
-                          </span>
+                          <span className="chip chip-flag">failed</span>
                         )}
                       </span>
                       <span style={{ display: "flex", gap: 8 }}>
@@ -704,6 +703,11 @@ function CircleDetailPageInner() {
                         )}
                       </span>
                     </div>
+                    {n.status === "failed" && (
+                      <p className={isThrottleMessage(n.error ?? "") ? "auth-warn" : "auth-error"} style={{ marginTop: 10, marginBottom: 0 }}>
+                        {n.error ?? "Extraction failed."}
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>
@@ -813,7 +817,9 @@ function CircleDetailPageInner() {
         <div className="modal-overlay" onClick={() => !genBusy && setShowGen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>{genMode === "quiz" ? "Generate a quiz" : "Generate a flashcard deck"}</h3>
-            {genError && <div className="auth-error">{genError}</div>}
+            {genError && (
+              <div className={isThrottleMessage(genError) ? "auth-warn" : "auth-error"}>{genError}</div>
+            )}
             <div className="field">
               <input
                 className="tinp"

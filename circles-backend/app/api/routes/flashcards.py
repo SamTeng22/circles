@@ -1,8 +1,10 @@
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
+from google.api_core.exceptions import GoogleAPICallError
 from pydantic import BaseModel, Field
 from app.core.config import settings
 from app.core.firebase import get_current_user
+from app.core.gemini_errors import friendly_gemini_error
 from app.core.rate_limit import limiter, identify_user, flashcard_generation_limit
 from app.db.database import get_pool
 from app.services.flashcard_generator import generate_flashcards
@@ -62,11 +64,14 @@ async def generate_deck(
         await _assert_member(conn, body.circle_id, current_user["id"])
         notes = await _fetch_selected_notes(conn, body.circle_id, body.note_ids)
 
-    cards = await generate_flashcards(
-        notes=notes,
-        num_cards=body.num_cards,
-        difficulty=body.difficulty,
-    )
+    try:
+        cards = await generate_flashcards(
+            notes=notes,
+            num_cards=body.num_cards,
+            difficulty=body.difficulty,
+        )
+    except GoogleAPICallError as e:
+        raise HTTPException(status_code=503, detail=friendly_gemini_error(e))
     if not cards:
         raise HTTPException(
             status_code=400,

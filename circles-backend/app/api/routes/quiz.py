@@ -1,9 +1,11 @@
 import json
 from typing import Literal, Union
 from fastapi import APIRouter, Depends, HTTPException, Request
+from google.api_core.exceptions import GoogleAPICallError
 from pydantic import BaseModel, Field, model_validator
 from app.core.config import settings
 from app.core.firebase import get_current_user
+from app.core.gemini_errors import friendly_gemini_error
 from app.core.rate_limit import limiter, identify_user, quiz_generation_limit
 from app.db.database import get_pool
 from app.services.authz import assert_member
@@ -70,11 +72,14 @@ async def generate_quiz(
         await assert_member(conn, body.circle_id, current_user["id"])
         notes = await _fetch_selected_notes(conn, body.circle_id, body.note_ids)
 
-    questions = await generate_quiz_questions(
-        notes=notes,
-        question_type_counts=body.question_types.model_dump(),
-        difficulty=body.difficulty,
-    )
+    try:
+        questions = await generate_quiz_questions(
+            notes=notes,
+            question_type_counts=body.question_types.model_dump(),
+            difficulty=body.difficulty,
+        )
+    except GoogleAPICallError as e:
+        raise HTTPException(status_code=503, detail=friendly_gemini_error(e))
 
     async with pool.acquire() as conn:
         quiz = await conn.fetchrow(
